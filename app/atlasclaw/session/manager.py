@@ -2,17 +2,17 @@
 
 This module stores session metadata in JSON and transcripts in JSONL files.
 
-Storage layout:
+Storage layout (new workspace-based):
 ```text
-~/.atlasclaw/agents/<agent_id>/sessions/<user_id>/
+<workspace>/users/<user_id>/sessions/
 ├── sessions.json                        # Session metadata keyed by session key
 ├── <session_id>.jsonl                   # Main transcript file
 ├── <session_id>-topic-<thread_id>.jsonl # Thread-specific transcript file
 └── archive/                             # Archived transcripts
 ```
 
-Legacy layout (`sessions/` without user_id sub-dir) is migrated to `sessions/default/`
-on first access.
+Legacy layout (~/.atlasclaw/agents/<agent_id>/sessions/<user_id>/) is still supported
+for backward compatibility.
 """
 
 from __future__ import annotations
@@ -58,32 +58,41 @@ class SessionManager:
     
     def __init__(
         self,
-        agents_dir: str = "~/.atlasclaw/agents",
-        agent_id: str = "main",
+        workspace_path: str = ".",
         user_id: str = "default",
         reset_mode: ResetMode = ResetMode.DAILY,
         daily_reset_hour: int = 4,
         idle_reset_minutes: int = 60,
+        # Legacy parameters for backward compatibility
+        agents_dir: Optional[str] = None,
+        agent_id: Optional[str] = None,
     ):
         """Initialize the session manager.
 
         Args:
-            agents_dir: Root directory that stores agent data.
-            agent_id: Agent identifier used to select the session namespace.
+            workspace_path: Path to the workspace root directory.
             user_id: User identifier for per-user storage isolation.
             reset_mode: Automatic reset policy.
             daily_reset_hour: Hour of day used by daily reset mode.
             idle_reset_minutes: Idle timeout used by idle reset mode.
+            agents_dir: (Legacy) Root directory that stores agent data.
+            agent_id: (Legacy) Agent identifier.
         """
-        self.agents_dir = Path(agents_dir).expanduser()
-        self.agent_id = agent_id
+        self.workspace_path = Path(workspace_path).resolve()
         self.user_id = user_id
         self.reset_mode = reset_mode
         self.daily_reset_hour = daily_reset_hour
         self.idle_reset_minutes = idle_reset_minutes
         
-        # Session storage root for the current agent + user.
-        self.sessions_dir = self.agents_dir / agent_id / "sessions" / user_id
+        # Session storage root: users/<user_id>/sessions/
+        self.sessions_dir = self.workspace_path / "users" / user_id / "sessions"
+
+        # Legacy support
+        self._legacy_mode = agents_dir is not None
+        if self._legacy_mode:
+            self.agents_dir = Path(agents_dir).expanduser()
+            self.agent_id = agent_id or "main"
+            self.sessions_dir = self.agents_dir / self.agent_id / "sessions" / user_id
 
         # In-memory metadata cache and per-session locks.
         self._metadata_cache: dict[str, SessionMetadata] = {}

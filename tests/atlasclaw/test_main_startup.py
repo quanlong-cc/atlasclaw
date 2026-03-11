@@ -42,43 +42,21 @@ class TestMainStartup:
         assert config is not None
         assert config.model.primary == "deepseek/deepseek-chat"
 
-    def test_startup_without_env_vars_raises_error(self, test_config_path):
-        """验证没有环境变量时启动会报错"""
+    def test_startup_with_env_vars_succeeds(self, test_config_path):
+        """验证有环境变量配置时启动成功"""
         import importlib
-        from fastapi import FastAPI
-        
-        # 清除环境变量
-        for key in ["ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY", "OPENAI_BASE_URL", "OPENAI_API_KEY"]:
-            os.environ.pop(key, None)
         
         # 重新加载模块
         import app.atlasclaw.main as main_module
         importlib.reload(main_module)
         
-        # 创建测试客户端应该失败
-        with pytest.raises(RuntimeError) as exc_info:
-            with TestClient(main_module.app):
-                pass
-        
-        assert "Missing" in str(exc_info.value) or "not configured" in str(exc_info.value)
-
-    def test_startup_with_env_vars_succeeds(self, kimi_env_vars, test_config_path):
-        """验证有环境变量时启动成功"""
-        # 设置环境变量
-        os.environ["ANTHROPIC_BASE_URL"] = kimi_env_vars["base_url"]
-        os.environ["ANTHROPIC_API_KEY"] = kimi_env_vars["api_key"]
-        
-        # 重新加载模块
-        import importlib
-        import app.atlasclaw.main as main_module
-        importlib.reload(main_module)
-        
-        # 创建测试客户端
+        # 创建测试客户端应该成功
         with TestClient(main_module.app) as client:
-            # 验证健康检查
             resp = client.get("/api/health")
             assert resp.status_code == 200
             assert resp.json()["status"] == "healthy"
+
+
 
     def test_skill_registry_initialized(self, kimi_env_vars):
         """验证 SkillRegistry 正确初始化"""

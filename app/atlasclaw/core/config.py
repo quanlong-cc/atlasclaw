@@ -84,42 +84,77 @@ initializeConfiguration manager
     
     def load(self) -> AtlasClawConfig:
         """
-
-configuration
+        加载配置
         
-        :default value <- <- environment variable <- runtime override
+        优先级: 默认值 <- 全局配置 <- 工作区配置 <- 用户区配置 <- 环境变量 <- 运行时覆盖
         
         Returns:
-            configuration
-        
-"""
-        # 1. fromdefault valuestart
+            配置对象
+        """
+        # 1. 从默认值开始
         config_dict: dict[str, Any] = {}
         
-        # 2. from
-        file_config = self._load_from_file()
-        if file_config:
-            config_dict = self._deep_merge(config_dict, file_config)
+        # 2. 加载全局配置
+        global_config = self._load_from_file()
+        if global_config:
+            config_dict = self._deep_merge(config_dict, global_config)
         
-        # 3. fromenvironment variable
+        # 3. 加载工作区配置（最高优先级文件配置）
+        workspace_config = self._load_workspace_config()
+        if workspace_config:
+            config_dict = self._deep_merge(config_dict, workspace_config)
+        
+        # 4. 从环境变量加载
         env_config = self._load_from_env()
         if env_config:
             config_dict = self._deep_merge(config_dict, env_config)
         
-        # 4. applyruntime override
+        # 5. 应用运行时覆盖
         if self._runtime_overrides:
             config_dict = self._deep_merge(config_dict, self._runtime_overrides)
         
-        # 5. createconfiguration
+        # 6. 创建配置对象
         try:
             self._config = AtlasClawConfig(**config_dict)
         except ValidationError as e:
-            # configuration usedefault value
+            # 配置验证失败，使用默认值
             print(f"[ConfigManager] 配置验证失败，使用默认值: {e}")
             self._config = AtlasClawConfig()
         
         self._loaded = True
         return self._config
+    
+    def _load_workspace_config(self) -> Optional[dict]:
+        """加载工作区配置"""
+        # 首先尝试从已加载的配置中获取工作区路径
+        workspace_path = "."
+        if self._config_path:
+            workspace_path = str(Path(self._config_path).parent)
+        
+        # 尝试加载工作区 atlasclaw.json
+        workspace_config_path = Path(workspace_path) / "atlasclaw.json"
+        if workspace_config_path.exists():
+            try:
+                with open(workspace_config_path, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception as e:
+                print(f"[ConfigManager] 读取工作区配置失败 {workspace_config_path}: {e}")
+        
+        return None
+    
+    def load_user_config(self, user_id: str) -> dict:
+        """加载用户区配置"""
+        workspace_path = Path(self.config.workspace.path)
+        user_config_path = workspace_path / "users" / user_id / "atlasclaw.json"
+        
+        if user_config_path.exists():
+            try:
+                with open(user_config_path, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception as e:
+                print(f"[ConfigManager] 读取用户配置失败 {user_config_path}: {e}")
+        
+        return {}
     
     def reload(self) -> AtlasClawConfig:
         """configuration"""

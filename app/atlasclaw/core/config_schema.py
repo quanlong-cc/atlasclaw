@@ -200,11 +200,17 @@ class MemoryConfig(BaseModel):
     max_results: int = Field(default=6, ge=1)
 
 
+class WorkspaceConfig(BaseModel):
+    """Workspace configuration"""
+    path: str = Field(default=".", description="工作区路径，默认为当前目录")
+    per_user_isolation: bool = Field(default=True, description="是否按用户隔离数据")
+
+
 class AtlasClawConfig(BaseModel):
     """AtlasClaw configuration"""
     log_level: LogLevel = LogLevel.INFO
-    workspace_path: str = Field(default="~/.atlasclaw/workspace", description="工作区路径")
-    agents_dir: str = Field(default="~/.atlasclaw/agents", description="智能体目录")
+    workspace: WorkspaceConfig = Field(default_factory=WorkspaceConfig, description="工作区配置")
+    agents_dir: str = Field(default="~/.atlasclaw/agents", description="智能体目录（向后兼容）")
     
     # subconfiguration
     agent_defaults: AgentDefaultsConfig = Field(default_factory=AgentDefaultsConfig)

@@ -7,8 +7,12 @@ openspec/
 *.pyo
 *.pyd
 .atlasclaw-test/
+.atlasclaw/
+users/
+workspace/
 
 **/__pycache__/
+**/.pytest_cache/
 
 .env
 nul

@@ -36,6 +36,8 @@ from app.atlasclaw.agent.runner import AgentRunner
 from app.atlasclaw.agent.prompt_builder import PromptBuilder, PromptBuilderConfig
 from app.atlasclaw.core.config import get_config, get_config_path
 from app.atlasclaw.core.provider_registry import ServiceProviderRegistry
+from app.atlasclaw.core.workspace import WorkspaceInitializer, UserWorkspaceInitializer
+from app.atlasclaw.agent.agent_definition import AgentLoader
 
 
 _global_provider_registry: Optional[ServiceProviderRegistry] = None
@@ -56,7 +58,34 @@ async def lifespan(app: FastAPI):
     config = get_config()
     config_root = get_config_path().parent if get_config_path() is not None else Path.cwd()
     
-    _session_manager = SessionManager(agents_dir=config.agents_dir)
+    # Get workspace path from config
+    workspace_path = config.workspace.path
+    
+    # Initialize workspace directory structure
+    workspace_initializer = WorkspaceInitializer(workspace_path)
+    if not workspace_initializer.is_initialized():
+        workspace_initializer.initialize()
+        print(f"[AtlasClaw] Initialized workspace at: {workspace_path}")
+    
+    # Initialize default user directory (for non-authenticated mode)
+    default_user_initializer = UserWorkspaceInitializer(workspace_path, "default")
+    if not default_user_initializer.is_initialized():
+        default_user_initializer.initialize()
+        print(f"[AtlasClaw] Initialized default user directory")
+    
+    # Load agent definitions
+    agent_loader = AgentLoader(workspace_path)
+    main_agent_config = agent_loader.load_agent("main")
+    print(f"[AtlasClaw] Loaded agent: {main_agent_config.display_name}")
+    
+    # Initialize SessionManager with new workspace-based path
+    _session_manager = SessionManager(
+        workspace_path=workspace_path,
+        user_id="default",
+        reset_mode=config.reset.mode,
+        daily_reset_hour=config.reset.daily_hour,
+        idle_reset_minutes=config.reset.idle_minutes,
+    )
     _session_queue = SessionQueue()
     _skill_registry = SkillRegistry()
     
@@ -75,8 +104,8 @@ async def lifespan(app: FastAPI):
     registered_tools = register_builtin_tools(_skill_registry, profile=ToolProfile.FULL)
     print(f"[AtlasClaw] Registered {len(registered_tools)} built-in tools")
     
-    # Load skills from built-in providers, workspace, and user directories
-    # 1. Built-in provider skills (bundled with application)
+    # Load skills from multiple sources (priority: workspace > global > built-in)
+    # 1. Built-in provider skills (lowest priority)
     providers_dir = Path(__file__).parent / "providers"
     if providers_dir.exists():
         for provider_path in providers_dir.iterdir():
@@ -85,7 +114,17 @@ async def lifespan(app: FastAPI):
                 if provider_skills.exists():
                     _skill_registry.load_from_directory(str(provider_skills), location="built-in")
 
-    # 1b. Additional webhook skill roots (provider-qualified markdown skills)
+    # 2. Global skills (user home directory)
+    global_skills = Path.home() / ".atlasclaw" / "skills"
+    if global_skills.exists():
+        _skill_registry.load_from_directory(str(global_skills), location="global")
+    
+    # 3. Workspace skills (highest priority)
+    workspace_skills = Path(workspace_path) / ".atlasclaw" / "skills"
+    if workspace_skills.exists():
+        _skill_registry.load_from_directory(str(workspace_skills), location="workspace")
+    
+    # 4. Additional webhook skill roots
     if config.webhook.enabled and config.webhook.skill_sources:
         for source in config.webhook.skill_sources:
             source_root = (config_root / source.root).resolve()
@@ -95,16 +134,6 @@ async def lifespan(app: FastAPI):
                     location="external",
                     provider=source.provider,
                 )
-    
-    # 2. Workspace skills (project-specific, highest priority)
-    workspace_skills = Path.cwd() / "skills"
-    if workspace_skills.exists():
-        _skill_registry.load_from_directory(str(workspace_skills), location="workspace")
-    
-    # 3. User skills (personal overrides)
-    user_skills = Path.home() / ".atlasclaw" / "skills"
-    if user_skills.exists():
-        _skill_registry.load_from_directory(str(user_skills), location="user")
     
     model_name = config.model.primary
     
@@ -164,7 +193,7 @@ async def lifespan(app: FastAPI):
     agent = Agent(
         pydantic_model,
         deps_type=SkillDeps,
-        system_prompt="You are UniClaw, an enterprise AI assistant.",
+        system_prompt=main_agent_config.system_prompt or "You are AtlasClaw, an enterprise AI assistant.",
     )
     
     # Register all skills as agent tools
