@@ -1,0 +1,23 @@
+{
+  "name": "atlasclaw-frontend",
+  "version": "1.0.0",
+  "description": "AtlasClaw Enterprise Assistant Frontend",
+  "type": "module",
+  "scripts": {
+    "build": "esbuild scripts/main.js --bundle --minify --outfile=dist/app.min.js --format=esm",
+    "build:dev": "esbuild scripts/main.js --bundle --outfile=dist/app.js --format=esm --sourcemap",
+    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js"
+  },
+  "devDependencies": {
+    "esbuild": "^0.20.0",
+    "jest": "^29.7.0",
+    "jest-environment-jsdom": "^29.7.0"
+  },
+  "jest": {
+    "testEnvironment": "jsdom",
+    "rootDir": "../..",
+    "testMatch": ["<rootDir>/tests/frontend/**/*.test.js"],
+    "moduleFileExtensions": ["js"],
+    "transform": {}
+  }
+}

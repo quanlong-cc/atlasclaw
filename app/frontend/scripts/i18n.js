@@ -1,0 +1,221 @@
+/**
+ * Internationalization (i18n) Module
+ * Provides multi-language support
+ */
+
+const LOCALE_STORAGE_KEY = 'atlasclaw_locale';
+const SUPPORTED_LOCALES = ['zh-CN', 'en-US'];
+const DEFAULT_LOCALE = 'zh-CN';
+
+let currentLocale = DEFAULT_LOCALE;
+let translations = {};
+let localeLoaded = false;
+
+/**
+ * Detect browser language
+ * @returns {string} Detected locale code
+ */
+export function detectBrowserLocale() {
+    const browserLang = navigator.language || navigator.userLanguage;
+    
+    // Direct match
+    if (SUPPORTED_LOCALES.includes(browserLang)) {
+        return browserLang;
+    }
+    
+    // Prefix match (e.g., 'zh' -> 'zh-CN', 'en' -> 'en-US')
+    const langPrefix = browserLang.split('-')[0];
+    if (langPrefix === 'zh') return 'zh-CN';
+    if (langPrefix === 'en') return 'en-US';
+    
+    return DEFAULT_LOCALE;
+}
+
+/**
+ * Get saved locale preference
+ * @returns {string|null} Saved locale code
+ */
+export function getSavedLocale() {
+    try {
+        return localStorage.getItem(LOCALE_STORAGE_KEY);
+    } catch (e) {
+        console.warn('[i18n] Cannot access localStorage:', e.message);
+        return null;
+    }
+}
+
+/**
+ * Save locale preference
+ * @param {string} locale - Locale code
+ */
+export function saveLocale(locale) {
+    try {
+        localStorage.setItem(LOCALE_STORAGE_KEY, locale);
+    } catch (e) {
+        console.warn('[i18n] Cannot save to localStorage:', e.message);
+    }
+}
+
+/**
+ * Load locale file
+ * @param {string} locale - Locale code
+ * @returns {Promise<object>} Translations object
+ */
+export async function loadLocale(locale) {
+    if (!SUPPORTED_LOCALES.includes(locale)) {
+        console.warn(`[i18n] Unsupported locale: ${locale}, falling back to ${DEFAULT_LOCALE}`);
+        locale = DEFAULT_LOCALE;
+    }
+    
+    try {
+        const response = await fetch(`/locales/${locale}.json`);
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+        }
+        
+        translations = await response.json();
+        currentLocale = locale;
+        localeLoaded = true;
+        
+        console.log(`[i18n] Loaded locale: ${locale}`);
+        return translations;
+    } catch (e) {
+        console.error(`[i18n] Failed to load locale ${locale}:`, e.message);
+        
+        // If not default locale, try loading default
+        if (locale !== DEFAULT_LOCALE) {
+            return loadLocale(DEFAULT_LOCALE);
+        }
+        
+        throw e;
+    }
+}
+
+/**
+ * Initialize i18n
+ * Detect language and load corresponding file
+ * @returns {Promise<string>} Current locale code
+ */
+export async function initI18n() {
+    // Prefer saved locale preference
+    let locale = getSavedLocale();
+    
+    // Otherwise detect browser language
+    if (!locale) {
+        locale = detectBrowserLocale();
+    }
+    
+    await loadLocale(locale);
+    return currentLocale;
+}
+
+/**
+ * Get translated text
+ * @param {string} key - Translation key (e.g., 'app.title')
+ * @param {object} params - Interpolation parameters
+ * @returns {string} Translated text
+ */
+export function t(key, params = {}) {
+    const keys = key.split('.');
+    let value = translations;
+    
+    for (const k of keys) {
+        if (value && typeof value === 'object' && k in value) {
+            value = value[k];
+        } else {
+            console.warn(`[i18n] Missing translation: ${key}`);
+            return key;
+        }
+    }
+    
+    if (typeof value !== 'string') {
+        console.warn(`[i18n] Invalid translation value for: ${key}`);
+        return key;
+    }
+    
+    // Simple parameter interpolation {{name}}
+    return value.replace(/\{\{(\w+)\}\}/g, (match, name) => {
+        return params[name] !== undefined ? params[name] : match;
+    });
+}
+
+/**
+ * Get current locale
+ * @returns {string} Current locale code
+ */
+export function getCurrentLocale() {
+    return currentLocale;
+}
+
+/**
+ * Get supported locales list
+ * @returns {string[]} Locale code array
+ */
+export function getSupportedLocales() {
+    return [...SUPPORTED_LOCALES];
+}
+
+/**
+ * Switch locale
+ * @param {string} locale - Target locale code
+ * @returns {Promise<void>}
+ */
+export async function setLocale(locale) {
+    if (locale === currentLocale && localeLoaded) {
+        return;
+    }
+    
+    await loadLocale(locale);
+    saveLocale(locale);
+    
+    // Update all elements with data-i18n attribute
+    updatePageTranslations();
+}
+
+/**
+ * Update all page translations
+ */
+export function updatePageTranslations() {
+    // Update text content
+    document.querySelectorAll('[data-i18n]').forEach(el => {
+        const key = el.getAttribute('data-i18n');
+        el.textContent = t(key);
+    });
+    
+    // Update placeholder
+    document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
+        const key = el.getAttribute('data-i18n-placeholder');
+        el.placeholder = t(key);
+    });
+    
+    // Update title attribute
+    document.querySelectorAll('[data-i18n-title]').forEach(el => {
+        const key = el.getAttribute('data-i18n-title');
+        el.title = t(key);
+    });
+    
+    // Update page title
+    const titleKey = document.querySelector('title[data-i18n]');
+    if (titleKey) {
+        document.title = t(titleKey.getAttribute('data-i18n'));
+    }
+}
+
+/**
+ * Check if locale is loaded
+ * @returns {boolean}
+ */
+export function isLocaleLoaded() {
+    return localeLoaded;
+}
+
+export default {
+    initI18n,
+    t,
+    setLocale,
+    getCurrentLocale,
+    getSupportedLocales,
+    detectBrowserLocale,
+    updatePageTranslations,
+    isLocaleLoaded
+};

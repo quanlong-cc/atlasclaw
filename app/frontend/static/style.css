@@ -1,0 +1,65 @@
+/* SmartCMP AI Assistant Styles */
+
+/* Custom Deep Chat Styles */
+deep-chat::part(message-bubble) {
+    max-width: 80%;
+}
+
+deep-chat::part(avatar) {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+}
+
+/* Markdown Table Styles */
+deep-chat table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 8px 0;
+    font-size: 14px;
+}
+
+deep-chat th,
+deep-chat td {
+    border: 1px solid #ddd;
+    padding: 8px 12px;
+    text-align: left;
+}
+
+deep-chat th {
+    background-color: #f5f5f5;
+    font-weight: 600;
+}
+
+deep-chat tr:hover {
+    background-color: #f9f9f9;
+}
+
+/* Code Block Styles */
+deep-chat pre {
+    background-color: #f5f5f5;
+    padding: 12px;
+    border-radius: 8px;
+    overflow-x: auto;
+}
+
+deep-chat code {
+    font-family: 'Menlo', 'Monaco', 'Courier New', monospace;
+    font-size: 13px;
+}
+
+/* Status Label Styles */
+.status-running {
+    color: #27ae60;
+    font-weight: 500;
+}
+
+.status-stopped {
+    color: #e74c3c;
+    font-weight: 500;
+}
+
+.status-pending {
+    color: #f39c12;
+    font-weight: 500;
+}

@@ -1,0 +1,50 @@
+{
+  "model": {
+    "primary": "deepseek/deepseek-chat",
+    "fallbacks": [],
+    "temperature": 0.2,
+    "providers": {
+      "deepseek": {
+        "base_url": "https://api.deepseek.com",
+        "api_key": "${DS_API_KEY}",
+        "api_type": "openai"
+      }
+    }
+  },
+  "service_providers": {
+    "jira": {
+      "dev": {
+        "base_url": "http://192.168.1.107:8080/",
+        "username": "${JIRA_USERNAME}",
+        "password": "${JIRA_PASSWORD}",
+        "api_version": "2",
+        "default_project": "TEST"
+      }
+    }
+  },
+  "webhook": {
+    "enabled": true,
+    "header_name": "X-UniClaw-SK",
+    "skill_sources": [
+      {
+        "provider": "smartcmp",
+        "root": "../UniClaw-Providers/SmartCMP-Provider/skills"
+      },
+      {
+        "provider": "jira",
+        "root": "app/atlasclaw/providers/jira/skills"
+      }
+    ],
+    "systems": [
+      {
+        "system_id": "smartcmp-preapproval",
+        "enabled": true,
+        "sk_env": "ATLASCLAW_WEBHOOK_SK_SMARTCMP_PREAPPROVAL",
+        "default_agent_id": "main",
+        "allowed_skills": [
+          "smartcmp:preapproval-agent"
+        ]
+      }
+    ]
+  }
+}

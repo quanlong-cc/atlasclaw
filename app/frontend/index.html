@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title data-i18n="app.title">UniClaw AI Assistant</title>
+    <!-- Deep Chat -->
+    <script type="module" src="/static/deepChat.bundle.js"></script>
+    <!-- Styles -->
+    <link rel="stylesheet" href="/styles/main.css">
+    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="/static/mention.css">
+    <!-- App Entry (Open source: use source directly, Enterprise: change to /dist/app.min.js) -->
+    <script type="module" src="/scripts/main.js"></script>
+</head>
+<body>
+    <!-- Left Sidebar -->
+    <aside class="sidebar">
+        <div class="sidebar-header">
+            <button class="new-chat-btn">
+                <span>+</span>
+                <span data-i18n="app.newChat"></span>
+            </button>
+        </div>
+        <div class="sidebar-content">
+            <div class="chat-history-group">
+                <div class="group-title" data-i18n="app.today"></div>
+                <div class="history-item active" data-i18n="app.currentChat"></div>
+            </div>
+        </div>
+    </aside>
+    
+    <!-- Main Content -->
+    <main class="main-content">
+        <header class="chat-header">
+            <h1 data-i18n="app.title"></h1>
+            <!-- Language Switcher -->
+            <div class="language-switcher">
+                <button data-lang="zh-CN" class="active" data-i18n="language.zhCN"></button>
+                <button data-lang="en-US" data-i18n="language.enUS"></button>
+            </div>
+        </header>
+        
+        <div class="chat-wrapper">
+            <deep-chat
+                id="chat"
+                style="width: 100%; height: 100%; display: flex;"
+                chatStyle='{"backgroundColor": "#ffffff"}'
+                messageStyles='{
+                    "default": {
+                        "shared": {
+                            "bubble": {
+                                "borderRadius": "12px",
+                                "padding": "14px 18px",
+                                "fontSize": "15px",
+                                "lineHeight": "1.6",
+                                "maxWidth": "720px"
+                            },
+                            "outerContainer": {
+                                "marginTop": "16px",
+                                "marginBottom": "16px"
+                            }
+                        },
+                        "user": {
+                            "bubble": {
+                                "backgroundColor": "#4b6cb7",
+                                "color": "#ffffff"
+                            }
+                        },
+                        "ai": {
+                            "bubble": {
+                                "backgroundColor": "#f7f7f8",
+                                "color": "#333333"
+                            },
+                            "outerContainer": {
+                                "justifyContent": "center"
+                            }
+                        }
+                    }
+                }'
+                inputAreaStyle='{"padding": "20px 24px", "backgroundColor": "#fafafa", "borderTop": "1px solid #e5e5e5"}'
+                submitButtonStyles='{"submit": {"container": {"default": {"backgroundColor": "#4b6cb7", "borderRadius": "50%", "width": "40px", "height": "40px"}, "hover": {"backgroundColor": "#3a5a9a"}}}}'
+                textMarkdown="true">
+            </deep-chat>
+        </div>
+    </main>
+    
+    <!-- Confirm Dialog -->
+    <div id="confirmDialog" class="confirm-dialog hidden">
+        <div class="confirm-content">
+            <h3 data-i18n="dialog.confirmTitle"></h3>
+            <p id="confirmMessage" data-i18n="dialog.confirmMessage"></p>
+            <div class="confirm-buttons">
+                <button class="btn-cancel" data-i18n="dialog.cancel"></button>
+                <button class="btn-confirm" data-i18n="dialog.confirm"></button>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
