@@ -171,6 +171,16 @@ When implementing features, see `openspec/AGENTS.md` for spec-driven development
 - Use `openspec-cn` CLI for spec management
 - Follow three-phase workflow: Create → Implement → Archive
 
+## Commit Messages
+
+Use Conventional Commits: `feat`, `fix`, `docs`, `refactor`, `test`, `chore`.
+
+Format:
+- `<type>(<scope>): <summary>`
+
+Example:
+- `docs(config): align webhook env var examples`
+
 ---
 
 *Keep this file updated as the project evolves.*
