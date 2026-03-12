@@ -60,11 +60,19 @@
     },
 
     "oidc": {
+      "_comment": "OIDC/OAuth2 configuration for Bearer token validation and SSO login flow",
       "issuer": "https://auth.example.com",
       "client_id": "${OIDC_CLIENT_ID}",
       "client_secret": "${OIDC_CLIENT_SECRET}",
       "jwks_uri": "",
-      "scopes": ["openid", "profile", "email"]
+      "scopes": ["openid", "profile", "email"],
+      "_comment_sso": "SSO login flow endpoints (auto-discovered from issuer if empty)",
+      "authorization_endpoint": "",
+      "token_endpoint": "",
+      "userinfo_endpoint": "",
+      "redirect_uri": "https://atlasclaw.example.com/api/auth/callback",
+      "pkce_enabled": true,
+      "pkce_method": "S256"
     },
 
     "api_key": {

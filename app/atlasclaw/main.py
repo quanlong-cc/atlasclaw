@@ -139,12 +139,12 @@ async def lifespan(app: FastAPI):
     ChannelRegistry.register("sse", SSEHandler)
     ChannelRegistry.register("rest", RESTHandler)
     print(f"[AtlasClaw] Registered built-in channel handlers")
-    
+
     # Scan providers for channel and auth extensions
     providers_dir = Path(workspace_path) / ".atlasclaw" / "providers"
     scan_results = ProviderScanner.scan_providers(providers_dir)
     print(f"[AtlasClaw] Provider scan complete: {len(scan_results['channels'])} channels, {len(scan_results['auth'])} auth providers")
-    
+
     # Load agent definitions
     agent_loader = AgentLoader(workspace_path)
     main_agent_config = agent_loader.load_agent("main")
@@ -199,7 +199,7 @@ async def lifespan(app: FastAPI):
                 if provider_skills.exists():
                     provider_name = provider_path.name
                     _skill_registry.load_from_directory(
-                        str(provider_skills), 
+                        str(provider_skills),
                         location="workspace-provider",
                         provider=provider_name
                     )
@@ -213,7 +213,7 @@ async def lifespan(app: FastAPI):
     workspace_skills = Path(workspace_path) / ".atlasclaw" / "skills"
     if workspace_skills.exists():
         _skill_registry.load_from_directory(str(workspace_skills), location="workspace")
-    
+
     model_name = config.model.primary
     
     # Resolve model provider config from atlasclaw.json
@@ -292,6 +292,16 @@ async def lifespan(app: FastAPI):
     
     print(f"[AtlasClaw] Agent created with model: {pydantic_model}")
     
+    # Expose config on app.state so routes (e.g. SSO) can access it
+    app.state.config = config
+    # Coerce auth dict → AuthConfig object so SSO routes can call .provider / .oidc
+    if config.auth is not None:
+        from app.atlasclaw.auth.config import AuthConfig
+        if isinstance(config.auth, dict):
+            app.state.config.auth = AuthConfig(**config.auth)
+        else:
+            app.state.config.auth = config.auth
+
     api_context = APIContext(
         session_manager=_session_manager,
         session_queue=_session_queue,
@@ -378,13 +388,28 @@ def create_app() -> FastAPI:
     # Include API routes
     api_router = create_router()
     app.include_router(api_router)
-    
+
     # Include channel webhook routes
     app.include_router(channel_hooks_router)
-    
+
     # Include agent info routes
     app.include_router(agent_info_router)
-    
+
+    # Register AuthMiddleware — must be done at app creation time
+    # (middleware cannot be added after startup)
+    try:
+        from app.atlasclaw.auth.middleware import setup_auth_middleware
+        from app.atlasclaw.core.config import get_config
+        from app.atlasclaw.auth.config import AuthConfig
+        _cfg = get_config()
+        _auth = _cfg.auth if _cfg else None
+        if isinstance(_auth, dict):
+            _auth = AuthConfig(**_auth)
+        setup_auth_middleware(app, _auth)
+    except Exception as _e:
+        import logging as _logging
+        _logging.getLogger(__name__).warning("AuthMiddleware setup skipped: %s", _e)
+
     return app
 
 

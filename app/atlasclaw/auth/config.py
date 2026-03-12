@@ -32,11 +32,20 @@ class SmartCMPAuthConfig(BaseModel):
 
 class OIDCAuthConfig(BaseModel):
     """OIDC / OAuth2 provider configuration."""
+    # Token validation settings
     issuer: str = ""
     client_id: str = ""
     client_secret: str = ""
     jwks_uri: str = ""
     scopes: list[str] = ["openid", "profile", "email"]
+    
+    # SSO login flow settings
+    authorization_endpoint: str = ""
+    token_endpoint: str = ""
+    userinfo_endpoint: str = ""
+    redirect_uri: str = ""
+    pkce_enabled: bool = True
+    pkce_method: str = "S256"
 
     def expanded(self) -> "OIDCAuthConfig":
         return OIDCAuthConfig(
@@ -45,6 +54,12 @@ class OIDCAuthConfig(BaseModel):
             client_secret=expand_env(self.client_secret),
             jwks_uri=expand_env(self.jwks_uri),
             scopes=self.scopes,
+            authorization_endpoint=expand_env(self.authorization_endpoint),
+            token_endpoint=expand_env(self.token_endpoint),
+            userinfo_endpoint=expand_env(self.userinfo_endpoint),
+            redirect_uri=expand_env(self.redirect_uri),
+            pkce_enabled=self.pkce_enabled,
+            pkce_method=self.pkce_method,
         )
 
 

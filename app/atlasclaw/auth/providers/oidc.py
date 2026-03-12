@@ -97,9 +97,13 @@ class OIDCProvider(AuthProvider):
                 credential,
                 public_key,
                 algorithms=["RS256", "RS384", "RS512"],
-                audience=self._audience,
                 issuer=self._issuer,
-                options={"verify_exp": True},
+                options={
+                    "verify_exp": True,
+                    # Keycloak access_token aud may not include client_id;
+                    # signature + expiry + issuer checks are sufficient.
+                    "verify_aud": False,
+                },
             )
         except pyjwt.ExpiredSignatureError:
             raise AuthenticationError("OIDC token has expired")

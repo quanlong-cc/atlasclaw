@@ -29,6 +29,23 @@
       }
     }
   },
+  "_auth": {
+    "provider": "oidc",
+    "cache_ttl_seconds": 300,
+    "oidc": {
+      "issuer": "${OIDC_ISSUER}",
+      "client_id": "${OIDC_CLIENT_ID}",
+      "client_secret": "${OIDC_CLIENT_SECRET}",
+      "jwks_uri": "${OIDC_ISSUER}/protocol/openid-connect/certs",
+      "scopes": ["openid", "profile", "email"],
+      "authorization_endpoint": "${OIDC_ISSUER}/protocol/openid-connect/auth",
+      "token_endpoint": "${OIDC_ISSUER}/protocol/openid-connect/token",
+      "userinfo_endpoint": "${OIDC_ISSUER}/protocol/openid-connect/userinfo",
+      "redirect_uri": "${OIDC_REDIRECT_URI}",
+      "pkce_enabled": true,
+      "pkce_method": "S256"
+    }
+  },
   "webhook": {
     "enabled": false,
     "header_name": "X-UniClaw-SK",
