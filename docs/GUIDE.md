@@ -215,19 +215,14 @@ Multiple instances per provider type are supported. Instance names (`prod`, `dev
 
 ### 3.3 Webhook Configuration
 
-Configure inbound webhooks for provider-qualified skills (e.g., triggered by SmartCMP):
+Configure inbound webhooks for provider-qualified skills already loaded from `providers_root` (for example, triggered by SmartCMP):
 
 ```json
 {
+  "providers_root": "../atlasclaw-providers/providers",
   "webhook": {
     "enabled": true,
     "header_name": "X-AtlasClaw-SK",
-    "skill_sources": [
-      {
-        "provider": "smartcmp",
-        "root": "../AtlasClaw-Providers/SmartCMP-Provider/skills"
-      }
-    ],
     "systems": [
       {
         "system_id": "smartcmp-preapproval",

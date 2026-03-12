@@ -127,12 +127,6 @@ class SkillsConfig(BaseModel):
     md_skills_max_file_bytes: int = Field(default=262144, ge=1, description="Maximum size of a single SKILL.md file in bytes (default 256KB)")
 
 
-class WebhookSkillSourceConfig(BaseModel):
-    """Additional markdown-skill roots addressable by provider-qualified name."""
-    provider: str = Field(description="Provider namespace used in provider:skill identifiers")
-    root: str = Field(description="Skills root directory; relative paths are resolved against providers_root first")
-
-
 class WebhookSystemConfig(BaseModel):
     """Per-system webhook access configuration."""
     system_id: str = Field(description="Stable identifier for the external system")
@@ -146,7 +140,6 @@ class WebhookConfig(BaseModel):
     """Inbound webhook dispatch configuration."""
     enabled: bool = False
     header_name: str = "X-AtlasClaw-SK"
-    skill_sources: list[WebhookSkillSourceConfig] = Field(default_factory=list)
     systems: list[WebhookSystemConfig] = Field(default_factory=list)
 
 

@@ -14,6 +14,7 @@ Usage:
 
 from contextlib import asynccontextmanager
 from pathlib import Path
+import re
 from typing import Optional
 
 from dotenv import load_dotenv
@@ -27,6 +28,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.atlasclaw.api.routes import create_router, APIContext, install_request_validation_logging, set_api_context
 from app.atlasclaw.api.webhook_dispatch import WebhookDispatchManager
+from app.atlasclaw.api.channel_hooks import router as channel_hooks_router
+from app.atlasclaw.api.agent_info import router as agent_info_router
 from app.atlasclaw.session.manager import SessionManager
 from app.atlasclaw.session.queue import SessionQueue
 from app.atlasclaw.skills.registry import SkillRegistry
@@ -36,8 +39,12 @@ from app.atlasclaw.agent.runner import AgentRunner
 from app.atlasclaw.agent.prompt_builder import PromptBuilder, PromptBuilderConfig
 from app.atlasclaw.core.config import get_config, get_config_path
 from app.atlasclaw.core.provider_registry import ServiceProviderRegistry
+from app.atlasclaw.core.provider_scanner import ProviderScanner
 from app.atlasclaw.core.workspace import WorkspaceInitializer, UserWorkspaceInitializer
 from app.atlasclaw.agent.agent_definition import AgentLoader
+from app.atlasclaw.channels import ChannelRegistry
+from app.atlasclaw.channels.handlers import WebSocketHandler, SSEHandler, RESTHandler
+from app.atlasclaw.auth import AuthRegistry
 
 
 _global_provider_registry: Optional[ServiceProviderRegistry] = None
@@ -50,15 +57,24 @@ _skill_registry: Optional[SkillRegistry] = None
 _agent_runner: Optional[AgentRunner] = None
 
 
-def _check_and_prompt_for_providers_skills(workspace_path: str | Path) -> None:
-    """Check if providers and skills directories are empty and prompt user to download.
+def _derive_provider_namespace(provider_dir_name: str) -> str:
+    """Normalize a provider directory name into a stable provider namespace."""
+    normalized = re.sub(r"[^a-z0-9]+", "-", provider_dir_name.strip().lower()).strip("-")
+    if normalized.endswith("-provider"):
+        normalized = normalized[: -len("-provider")]
+    return normalized or provider_dir_name.strip().lower()
+
+
+def _check_and_prompt_for_providers_skills(workspace_path: str | Path, providers_root: Path) -> None:
+    """Check if providers_root and workspace skills directories are empty.
 
     Args:
         workspace_path: Path to the workspace directory.
+        providers_root: Resolved provider repository path.
     """
     workspace = Path(workspace_path)
     atlasclaw_dir = workspace / ".atlasclaw"
-    providers_dir = atlasclaw_dir / "providers"
+    providers_dir = providers_root
     skills_dir = atlasclaw_dir / "skills"
 
     def _is_empty_or_missing(dir_path: Path) -> bool:
@@ -75,33 +91,19 @@ def _check_and_prompt_for_providers_skills(workspace_path: str | Path) -> None:
 
     if providers_empty or skills_empty:
         print("\n" + "=" * 70)
-        print("[AtlasClaw] NOTICE: Providers and/or Skills directories are empty")
+        print("[AtlasClaw] NOTICE: providers_root and/or workspace skills directories are empty")
         print("=" * 70)
 
         if providers_empty:
-            print(f"  - Providers directory is empty: {providers_dir}")
+            print(f"  - Providers root is empty: {providers_dir}")
         if skills_empty:
-            print(f"  - Skills directory is empty: {skills_dir}")
+            print(f"  - Workspace skills directory is empty: {skills_dir}")
 
         print("\nTo get started with providers and skills, please run:")
         print("\n  git clone https://github.com/CloudChef/atlasclaw-providers.git")
-        print(f"  cp -r atlasclaw-providers/providers/* {providers_dir}/")
-        print(f"  cp -r atlasclaw-providers/skills/* {skills_dir}/")
-        print("\nOr manually download and extract to the directories above.")
+        print(f"  # Configure atlasclaw.json with \"providers_root\": \"{providers_dir}\"")
+        print("\nOr manually place provider folders under the providers_root directory above.")
         print("=" * 70 + "\n")
-
-
-def _resolve_source_root(config_root: Path, providers_root: Path, root: str) -> Path:
-    """Resolve webhook skill roots with providers_root-aware fallback."""
-    root_path = Path(root).expanduser()
-    if root_path.is_absolute():
-        return root_path.resolve()
-
-    provider_relative = (providers_root / root_path).resolve()
-    if provider_relative.exists():
-        return provider_relative
-
-    return (config_root / root_path).resolve()
 
 
 @asynccontextmanager
@@ -124,13 +126,24 @@ async def lifespan(app: FastAPI):
         print(f"[AtlasClaw] Initialized workspace at: {workspace_path}")
 
     # Check if providers and skills are empty and prompt user
-    _check_and_prompt_for_providers_skills(workspace_path)
+    _check_and_prompt_for_providers_skills(workspace_path, providers_root)
 
     # Initialize default user directory (for non-authenticated mode)
     default_user_initializer = UserWorkspaceInitializer(workspace_path, "default")
     if not default_user_initializer.is_initialized():
         default_user_initializer.initialize()
         print(f"[AtlasClaw] Initialized default user directory")
+    
+    # Register built-in channel handlers
+    ChannelRegistry.register("websocket", WebSocketHandler)
+    ChannelRegistry.register("sse", SSEHandler)
+    ChannelRegistry.register("rest", RESTHandler)
+    print(f"[AtlasClaw] Registered built-in channel handlers")
+    
+    # Scan providers for channel and auth extensions
+    providers_dir = Path(workspace_path) / ".atlasclaw" / "providers"
+    scan_results = ProviderScanner.scan_providers(providers_dir)
+    print(f"[AtlasClaw] Provider scan complete: {len(scan_results['channels'])} channels, {len(scan_results['auth'])} auth providers")
     
     # Load agent definitions
     agent_loader = AgentLoader(workspace_path)
@@ -165,14 +178,46 @@ async def lifespan(app: FastAPI):
     print(f"[AtlasClaw] Registered {len(registered_tools)} built-in tools")
     
     # Load skills from multiple sources (priority: workspace > global > built-in)
+<<<<<<< HEAD
     # 1. Provider skills from configured providers_root (lowest priority)
     for provider_type in _global_provider_registry.list_providers():
         template = _global_provider_registry.get_template(provider_type)
         if template is None or not template.skills_dir.exists():
             continue
-        _skill_registry.load_from_directory(str(template.skills_dir), location="built-in")
+        _skill_registry.load_from_directory(
+            str(template.skills_dir),
+            location="built-in",
+            provider=_derive_provider_namespace(provider_type),
+        )
+<<<<<<< HEAD
+=======
+=======
+    # 1. Built-in skills from app providers
+    providers_dir = Path(__file__).parent / "providers"
+    if providers_dir.exists():
+        for provider_path in providers_dir.iterdir():
+            if provider_path.is_dir():
+                provider_skills = provider_path / "skills"
+                if provider_skills.exists():
+                    _skill_registry.load_from_directory(str(provider_skills), location="built-in")
+>>>>>>> 36916e9 (feat: implement channel system and provider extensions)
+>>>>>>> 7c1183a (refactor: qualify provider markdown skills)
 
-    # 2. Global skills (user home directory)
+    # 2. Workspace provider skills (.atlasclaw/providers)
+    workspace_providers_dir = Path(workspace_path) / ".atlasclaw" / "providers"
+    if workspace_providers_dir.exists():
+        for provider_path in workspace_providers_dir.iterdir():
+            if provider_path.is_dir():
+                provider_skills = provider_path / "skills"
+                if provider_skills.exists():
+                    provider_name = provider_path.name
+                    _skill_registry.load_from_directory(
+                        str(provider_skills), 
+                        location="workspace-provider",
+                        provider=provider_name
+                    )
+
+    # 3. Global skills (user home directory)
     global_skills = Path.home() / ".atlasclaw" / "skills"
     if global_skills.exists():
         _skill_registry.load_from_directory(str(global_skills), location="global")
@@ -181,17 +226,6 @@ async def lifespan(app: FastAPI):
     workspace_skills = Path(workspace_path) / ".atlasclaw" / "skills"
     if workspace_skills.exists():
         _skill_registry.load_from_directory(str(workspace_skills), location="workspace")
-    
-    # 4. Additional webhook skill roots
-    if config.webhook.enabled and config.webhook.skill_sources:
-        for source in config.webhook.skill_sources:
-            source_root = _resolve_source_root(config_root, providers_root, source.root)
-            if source_root.exists():
-                _skill_registry.load_from_directory(
-                    str(source_root),
-                    location="external",
-                    provider=source.provider,
-                )
     
     model_name = config.model.primary
     
@@ -357,6 +391,12 @@ def create_app() -> FastAPI:
     # Include API routes
     api_router = create_router()
     app.include_router(api_router)
+    
+    # Include channel webhook routes
+    app.include_router(channel_hooks_router)
+    
+    # Include agent info routes
+    app.include_router(agent_info_router)
     
     return app
 

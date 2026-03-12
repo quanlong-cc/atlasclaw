@@ -1,505 +1,479 @@
 # -*- coding: utf-8 -*-
-"""
-渠道适配器模块单元测试
+"""Tests for channel registry and handlers."""
 
-测试 BaseChannelAdapter、WebSocketAdapter、SSEAdapter、RESTCallbackAdapter、
-ChannelAdapterRegistry 等组件。
-"""
+from __future__ import annotations
 
-import asyncio
 import json
+import tempfile
+from pathlib import Path
 
 import pytest
 
-from app.atlasclaw.channels.base import (
-    BaseChannelAdapter,
-    ChannelConfig,
-    ChannelMessage,
-    DeliveryStatus,
-    MessageChunk,
-    MessageType,
+from app.atlasclaw.channels import (
+    ChannelConnection,
+    ChannelMode,
+    ChannelRegistry,
+    ChannelStore,
+    ChannelValidationResult,
+    ConnectionStatus,
+    InboundMessage,
+    OutboundMessage,
     SendResult,
-    TypingIndicator,
 )
-from app.atlasclaw.channels.registry import ChannelAdapterRegistry
-from app.atlasclaw.channels.sse_adapter import SSEAdapter
-from app.atlasclaw.channels.websocket_adapter import WebSocketAdapter
+from app.atlasclaw.channels.handler import ChannelHandler
+from app.atlasclaw.channels.handlers import RESTHandler, SSEHandler, WebSocketHandler
 
 
-# ── 测试辅助 ────────────────────────────────────────────────────
+class TestChannelModels:
+    """Test channel data models."""
 
+    def test_channel_mode_enum(self):
+        """Test ChannelMode enum values."""
+        assert ChannelMode.INBOUND.value == "inbound"
+        assert ChannelMode.OUTBOUND.value == "outbound"
+        assert ChannelMode.BIDIRECTIONAL.value == "bidirectional"
 
-class _FakeWebSocket:
-    """假 WebSocket 连接"""
+    def test_connection_status_enum(self):
+        """Test ConnectionStatus enum."""
+        assert ConnectionStatus.DISCONNECTED.name == "DISCONNECTED"
+        assert ConnectionStatus.CONNECTED.name == "CONNECTED"
 
-    def __init__(self, *, is_closed: bool = False):
-        self.sent: list[dict] = []
-        self._closed = is_closed
-
-    @property
-    def closed(self) -> bool:
-        return self._closed
-
-    async def send_text(self, data: str) -> None:
-        self.sent.append(json.loads(data))
-
-    async def send_json(self, data: dict) -> None:
-        self.sent.append(data)
-
-
-class _ConcreteAdapter(BaseChannelAdapter):
-    """BaseChannelAdapter 的具体实现用于测试"""
-
-    def __init__(self, config: ChannelConfig):
-        super().__init__(config)
-        self.sent_messages: list[tuple[str, str]] = []
-
-    async def send_message(self, chat_id, content, **kwargs):
-        self.sent_messages.append((chat_id, content))
-        return SendResult(success=True, message_id="msg-1", status=DeliveryStatus.SENT)
-
-
-# ── Data Models ─────────────────────────────────────────────────
-
-
-class TestChannelConfig:
-    """ChannelConfig 测试类"""
-
-    def test_create_config(self):
-        """测试创建配置"""
-        config = ChannelConfig(
-            channel_id="test", channel_type="websocket",
-        )
-        assert config.channel_id == "test"
-        assert config.text_chunk_limit == 4096
-        assert config.supports_markdown
-
-    def test_config_with_custom_values(self):
-        """测试自定义配置"""
-        config = ChannelConfig(
-            channel_id="telegram",
-            channel_type="telegram",
-            text_chunk_limit=4096,
-            supports_reactions=True,
-            rate_limit_per_second=30.0,
-        )
-        assert config.supports_reactions
-        assert config.rate_limit_per_second == 30.0
-
-
-class TestSendResult:
-    """SendResult 测试类"""
-
-    def test_success_result(self):
-        """测试成功结果"""
-        r = SendResult(success=True, message_id="m1", status=DeliveryStatus.SENT)
-        assert r.success
-        assert r.message_id == "m1"
-
-    def test_failure_result(self):
-        """测试失败结果"""
-        r = SendResult(success=False, error="timeout", status=DeliveryStatus.FAILED)
-        assert not r.success
-        assert r.error == "timeout"
-
-
-class TestChannelMessage:
-    """ChannelMessage 测试类"""
-
-    def test_create_text_message(self):
-        """测试创建文本消息"""
-        msg = ChannelMessage(
-            message_id="m1",
-            channel_id="ws",
-            chat_id="c1",
+    def test_inbound_message_creation(self):
+        """Test InboundMessage dataclass."""
+        msg = InboundMessage(
+            message_id="msg-123",
+            sender_id="user-456",
+            sender_name="Test User",
+            chat_id="chat-789",
+            channel_type="test",
             content="Hello",
         )
-        assert msg.message_type == MessageType.TEXT
+        assert msg.message_id == "msg-123"
         assert msg.content == "Hello"
+        assert msg.content_type == "text"  # default value
 
-    def test_message_with_reply(self):
-        """测试带回复的消息"""
-        msg = ChannelMessage(
-            message_id="m1", channel_id="ws", chat_id="c1",
-            content="Reply", reply_to_id="m0",
+    def test_outbound_message_creation(self):
+        """Test OutboundMessage dataclass."""
+        msg = OutboundMessage(
+            chat_id="chat-789",
+            content="Reply",
+            content_type="markdown",
         )
-        assert msg.reply_to_id == "m0"
+        assert msg.chat_id == "chat-789"
+        assert msg.content == "Reply"
+        assert msg.content_type == "markdown"
 
+    def test_send_result(self):
+        """Test SendResult dataclass."""
+        result = SendResult(success=True, message_id="msg-123")
+        assert result.success is True
+        assert result.message_id == "msg-123"
 
-# ── BaseChannelAdapter ──────────────────────────────────────────
-
-
-class TestBaseChannelAdapter:
-    """BaseChannelAdapter 测试类"""
-
-    def test_properties(self):
-        """测试属性"""
-        config = ChannelConfig(channel_id="test", channel_type="ws")
-        adapter = _ConcreteAdapter(config)
-        assert adapter.channel_id == "test"
-        assert adapter.config is config
-
-    def test_split_content_short(self):
-        """短文本不分割"""
-        config = ChannelConfig(
-            channel_id="test", channel_type="ws", text_chunk_limit=100,
+    def test_channel_connection(self):
+        """Test ChannelConnection dataclass."""
+        conn = ChannelConnection(
+            id="conn-123",
+            name="Test Connection",
+            channel_type="websocket",
+            config={"host": "localhost"},
+            enabled=True,
         )
-        adapter = _ConcreteAdapter(config)
-        chunks = adapter.split_content("Short text")
-        assert len(chunks) == 1
-        assert chunks[0] == "Short text"
-
-    def test_split_content_long(self):
-        """长文本分割"""
-        config = ChannelConfig(
-            channel_id="test", channel_type="ws", text_chunk_limit=50,
-        )
-        adapter = _ConcreteAdapter(config)
-        text = "Word " * 30  # ~150 chars
-        chunks = adapter.split_content(text)
-        assert len(chunks) >= 2
-        assert all(len(c) <= 50 for c in chunks)
-
-    def test_format_content_passthrough(self):
-        """默认内容直通"""
-        config = ChannelConfig(channel_id="test", channel_type="ws")
-        adapter = _ConcreteAdapter(config)
-        assert adapter.format_content("**bold**") == "**bold**"
-
-    def test_markdown_to_html(self):
-        """测试 Markdown 转 HTML"""
-        config = ChannelConfig(
-            channel_id="test", channel_type="ws", markdown_to_html=True,
-        )
-        adapter = _ConcreteAdapter(config)
-        result = adapter.format_content("**bold**")
-        assert "<b>bold</b>" in result
-
-    def test_html_to_markdown(self):
-        """测试 HTML 转 Markdown"""
-        config = ChannelConfig(
-            channel_id="test", channel_type="ws", html_to_markdown=True,
-        )
-        adapter = _ConcreteAdapter(config)
-        result = adapter.format_content("<b>bold</b>")
-        assert "**bold**" in result
-
-    @pytest.mark.asyncio
-    async def test_send_typing_indicator(self):
-        """测试发送输入指示器"""
-        config = ChannelConfig(
-            channel_id="test", channel_type="ws", supports_typing=True,
-        )
-        adapter = _ConcreteAdapter(config)
-        assert await adapter.send_typing_indicator("chat-1")
-
-    @pytest.mark.asyncio
-    async def test_send_typing_unsupported(self):
-        """测试不支持输入指示器"""
-        config = ChannelConfig(
-            channel_id="test", channel_type="ws", supports_typing=False,
-        )
-        adapter = _ConcreteAdapter(config)
-        assert not await adapter.send_typing_indicator("chat-1")
-
-    @pytest.mark.asyncio
-    async def test_send_chunk_buffer(self):
-        """测试分块缓冲"""
-        config = ChannelConfig(channel_id="test", channel_type="ws")
-        adapter = _ConcreteAdapter(config)
-
-        # 非最终块只缓冲
-        r1 = await adapter.send_chunk("c1", MessageChunk(content="a", chunk_index=0))
-        assert r1.success
-        assert r1.status == DeliveryStatus.PENDING
-
-        # 最终块触发发送
-        r2 = await adapter.send_chunk(
-            "c1", MessageChunk(content="b", chunk_index=1, is_final=True),
-        )
-        assert r2.success
-        assert r2.status == DeliveryStatus.SENT
-        assert len(adapter.sent_messages) == 1
-        assert adapter.sent_messages[0][1] == "ab"
-
-    @pytest.mark.asyncio
-    async def test_edit_message_unsupported(self):
-        """测试默认不支持编辑"""
-        config = ChannelConfig(channel_id="test", channel_type="ws")
-        adapter = _ConcreteAdapter(config)
-        r = await adapter.edit_message("c1", "m1", "new")
-        assert not r.success
-
-    @pytest.mark.asyncio
-    async def test_delete_message_unsupported(self):
-        """测试默认不支持删除"""
-        config = ChannelConfig(channel_id="test", channel_type="ws")
-        adapter = _ConcreteAdapter(config)
-        assert not await adapter.delete_message("c1", "m1")
+        assert conn.id == "conn-123"
+        assert conn.channel_type == "websocket"
+        assert conn.config["host"] == "localhost"
 
 
-# ── WebSocketAdapter ────────────────────────────────────────────
+class TestChannelRegistry:
+    """Test ChannelRegistry functionality."""
 
+    def setup_method(self):
+        """Clear registry before each test."""
+        ChannelRegistry._handlers.clear()
+        ChannelRegistry._instances.clear()
+        ChannelRegistry._connections.clear()
 
-class TestWebSocketAdapter:
-    """WebSocketAdapter 测试类"""
+    def test_register_handler(self):
+        """Test registering a channel handler."""
+        ChannelRegistry.register("websocket", WebSocketHandler)
+        
+        assert "websocket" in ChannelRegistry._handlers
+        assert ChannelRegistry._handlers["websocket"] == WebSocketHandler
 
-    def _make_adapter(self) -> tuple[WebSocketAdapter, _FakeWebSocket]:
-        config = ChannelConfig(channel_id="ws", channel_type="websocket")
-        ws = _FakeWebSocket()
-        adapter = WebSocketAdapter(config, connection=ws)
-        return adapter, ws
+    def test_get_handler(self):
+        """Test getting a registered handler."""
+        ChannelRegistry.register("websocket", WebSocketHandler)
+        
+        handler_class = ChannelRegistry.get("websocket")
+        assert handler_class == WebSocketHandler
 
-    @pytest.mark.asyncio
-    async def test_send_message(self):
-        """测试发送消息"""
-        adapter, ws = self._make_adapter()
-        result = await adapter.send_message("chat-1", "Hello!")
-        assert result.success
-        assert result.message_id is not None
-        assert len(ws.sent) == 1
-        assert ws.sent[0]["payload"]["content"] == "Hello!"
-
-    @pytest.mark.asyncio
-    async def test_send_message_no_connection(self):
-        """测试无连接发送"""
-        config = ChannelConfig(channel_id="ws", channel_type="websocket")
-        adapter = WebSocketAdapter(config)
-        result = await adapter.send_message("chat-1", "Hello!")
-        assert not result.success
-
-    @pytest.mark.asyncio
-    async def test_send_message_closed(self):
-        """测试连接已关闭"""
-        config = ChannelConfig(channel_id="ws", channel_type="websocket")
-        ws = _FakeWebSocket(is_closed=True)
-        adapter = WebSocketAdapter(config, connection=ws)
-        result = await adapter.send_message("chat-1", "Hello!")
-        assert not result.success
-
-    @pytest.mark.asyncio
-    async def test_send_typing(self):
-        """测试发送输入指示器"""
-        adapter, ws = self._make_adapter()
-        result = await adapter.send_typing_indicator("chat-1")
-        assert result
-        assert ws.sent[-1]["event"] == "typing"
-
-    @pytest.mark.asyncio
-    async def test_send_chunk(self):
-        """测试发送分块"""
-        adapter, ws = self._make_adapter()
-        chunk = MessageChunk(content="Partial", chunk_index=0, is_final=False)
-        result = await adapter.send_chunk("chat-1", chunk)
-        assert result.success
-        assert ws.sent[-1]["event"] == "stream"
-        assert ws.sent[-1]["payload"]["content"] == "Partial"
-
-    @pytest.mark.asyncio
-    async def test_edit_message(self):
-        """测试编辑消息"""
-        adapter, ws = self._make_adapter()
-        result = await adapter.edit_message("chat-1", "msg-1", "Updated")
-        assert result.success
-        assert ws.sent[-1]["event"] == "message_edit"
-
-    @pytest.mark.asyncio
-    async def test_delete_message(self):
-        """测试删除消息"""
-        adapter, ws = self._make_adapter()
-        result = await adapter.delete_message("chat-1", "msg-1")
-        assert result
-        assert ws.sent[-1]["event"] == "message_delete"
-
-    def test_add_remove_connection(self):
-        """测试添加/移除连接"""
-        config = ChannelConfig(channel_id="ws", channel_type="websocket")
-        adapter = WebSocketAdapter(config)
-        ws = _FakeWebSocket()
-        adapter.add_connection("chat-1", ws)
-        assert adapter.get_connection("chat-1") is ws
-        adapter.remove_connection("chat-1")
-        assert adapter.get_connection("chat-1") is None
-
-    @pytest.mark.asyncio
-    async def test_seq_increments(self):
-        """测试序列号递增"""
-        adapter, ws = self._make_adapter()
-        adapter.add_connection("c1", ws)
-        await adapter.send_message("c1", "msg1")
-        await adapter.send_message("c1", "msg2")
-        assert ws.sent[-1]["seq"] > ws.sent[0]["seq"]
-
-
-# ── SSEAdapter ──────────────────────────────────────────────────
-
-
-class TestSSEAdapter:
-    """SSEAdapter 测试类"""
-
-    def _make_adapter(self) -> tuple[SSEAdapter, list[tuple[str, dict]]]:
-        config = ChannelConfig(channel_id="sse", channel_type="sse")
-        adapter = SSEAdapter(config)
-        received: list[tuple[str, dict]] = []
-
-        def sender(event_type: str, data: dict):
-            received.append((event_type, data))
-
-        adapter.register_sender("chat-1", sender)
-        return adapter, received
-
-    @pytest.mark.asyncio
-    async def test_send_message(self):
-        """测试发送消息"""
-        adapter, received = self._make_adapter()
-        result = await adapter.send_message("chat-1", "Hello!")
-        assert result.success
-        assert len(received) == 1
-        assert received[0][0] == "message"
-        assert received[0][1]["content"] == "Hello!"
-
-    @pytest.mark.asyncio
-    async def test_send_message_no_sender(self):
-        """测试无发送函数"""
-        config = ChannelConfig(channel_id="sse", channel_type="sse")
-        adapter = SSEAdapter(config)
-        result = await adapter.send_message("chat-1", "Hello!")
-        assert not result.success
-
-    @pytest.mark.asyncio
-    async def test_send_typing(self):
-        """测试发送输入指示器"""
-        adapter, received = self._make_adapter()
-        result = await adapter.send_typing_indicator("chat-1")
-        assert result
-        assert received[-1][0] == "typing"
-
-    @pytest.mark.asyncio
-    async def test_send_chunk(self):
-        """测试发送分块"""
-        adapter, received = self._make_adapter()
-        chunk = MessageChunk(content="Delta", chunk_index=0, is_final=False)
-        result = await adapter.send_chunk("chat-1", chunk)
-        assert result.success
-        assert received[-1][0] == "assistant"  # 非 final 用 assistant 事件
-
-    @pytest.mark.asyncio
-    async def test_send_chunk_final(self):
-        """测试最终分块"""
-        adapter, received = self._make_adapter()
-        chunk = MessageChunk(content="End", chunk_index=1, is_final=True)
-        result = await adapter.send_chunk("chat-1", chunk)
-        assert result.success
-        assert received[-1][0] == "message"  # final 用 message 事件
-
-    @pytest.mark.asyncio
-    async def test_async_sender(self):
-        """测试异步发送函数"""
-        config = ChannelConfig(channel_id="sse", channel_type="sse")
-        adapter = SSEAdapter(config)
-        received = []
-
-        async def async_sender(event_type: str, data: dict):
-            received.append((event_type, data))
-
-        adapter.register_sender("chat-1", async_sender)
-        result = await adapter.send_message("chat-1", "Async test")
-        assert result.success
-        assert len(received) == 1
-
-    def test_unregister_sender(self):
-        """测试注销发送函数"""
-        adapter, _ = self._make_adapter()
-        adapter.unregister_sender("chat-1")
-        assert adapter._senders.get("chat-1") is None
-
-    def test_format_sse_event(self):
-        """测试格式化 SSE 事件"""
-        sse = SSEAdapter.format_sse_event("message", {"text": "hello"}, event_id=42)
-        assert "id: 42" in sse
-        assert "event: message" in sse
-        assert "data: " in sse
-        assert "hello" in sse
-
-    def test_format_sse_event_no_id(self):
-        """测试无 ID 格式化"""
-        sse = SSEAdapter.format_sse_event("ping", {})
-        assert "id:" not in sse
-        assert "event: ping" in sse
-
-
-# ── ChannelAdapterRegistry ──────────────────────────────────────
-
-
-class TestChannelAdapterRegistry:
-    """ChannelAdapterRegistry 测试类"""
-
-    def test_register_and_get(self):
-        """测试注册和获取"""
-        registry = ChannelAdapterRegistry()
-        config = ChannelConfig(channel_id="ws", channel_type="websocket")
-        adapter = WebSocketAdapter(config)
-        registry.register("ws", adapter)
-        assert registry.get("ws") is adapter
-
-    def test_unregister(self):
-        """测试注销"""
-        registry = ChannelAdapterRegistry()
-        config = ChannelConfig(channel_id="ws", channel_type="websocket")
-        registry.register("ws", WebSocketAdapter(config))
-        assert registry.unregister("ws")
-        assert registry.get("ws") is None
-
-    def test_unregister_nonexistent(self):
-        """测试注销不存在的适配器"""
-        registry = ChannelAdapterRegistry()
-        assert not registry.unregister("ghost")
+    def test_get_nonexistent_handler(self):
+        """Test getting a non-existent handler."""
+        handler_class = ChannelRegistry.get("nonexistent")
+        assert handler_class is None
 
     def test_list_channels(self):
-        """测试列出渠道"""
-        registry = ChannelAdapterRegistry()
-        config = ChannelConfig(channel_id="a", channel_type="ws")
-        registry.register("a", WebSocketAdapter(config))
-        registry.register("b", SSEAdapter(ChannelConfig(channel_id="b", channel_type="sse")))
-        channels = registry.list_channels()
-        assert set(channels) == {"a", "b"}
+        """Test listing registered channels."""
+        ChannelRegistry.register("websocket", WebSocketHandler)
+        ChannelRegistry.register("sse", SSEHandler)
+        
+        channels = ChannelRegistry.list_channels()
+        assert len(channels) == 2
+        
+        types = [c["type"] for c in channels]
+        assert "websocket" in types
+        assert "sse" in types
 
-    def test_create_websocket(self):
-        """测试工厂创建 WebSocket"""
-        registry = ChannelAdapterRegistry()
-        config = ChannelConfig(channel_id="ws", channel_type="websocket")
-        adapter = registry.create("websocket", config)
-        assert isinstance(adapter, WebSocketAdapter)
+    def test_create_instance(self):
+        """Test creating handler instance."""
+        ChannelRegistry.register("websocket", WebSocketHandler)
+        
+        instance = ChannelRegistry.create_instance(
+            "instance-1",
+            "websocket",
+            {"path": "/ws"}
+        )
+        
+        assert instance is not None
+        assert isinstance(instance, WebSocketHandler)
+        assert instance.config["path"] == "/ws"
 
-    def test_create_sse(self):
-        """测试工厂创建 SSE"""
-        registry = ChannelAdapterRegistry()
-        config = ChannelConfig(channel_id="sse", channel_type="sse")
-        adapter = registry.create("sse", config)
-        assert isinstance(adapter, SSEAdapter)
+    def test_get_instance(self):
+        """Test getting cached instance."""
+        ChannelRegistry.register("websocket", WebSocketHandler)
+        ChannelRegistry.create_instance("instance-1", "websocket", {})
+        
+        instance = ChannelRegistry.get_instance("instance-1")
+        assert instance is not None
+        assert isinstance(instance, WebSocketHandler)
 
-    def test_create_unknown(self):
-        """测试创建未知类型"""
-        registry = ChannelAdapterRegistry()
-        config = ChannelConfig(channel_id="x", channel_type="x")
-        assert registry.create("unknown_type", config) is None
-
-    def test_create_and_register(self):
-        """测试创建并注册"""
-        registry = ChannelAdapterRegistry()
-        config = ChannelConfig(channel_id="ws", channel_type="websocket")
-        adapter = registry.create_and_register("ws-1", "websocket", config)
-        assert adapter is not None
-        assert registry.get("ws-1") is adapter
-
-    def test_register_factory(self):
-        """测试注册工厂"""
-        registry = ChannelAdapterRegistry()
-        registry.register_factory("custom", WebSocketAdapter)
-        config = ChannelConfig(channel_id="c", channel_type="custom")
-        adapter = registry.create("custom", config)
-        assert isinstance(adapter, WebSocketAdapter)
+    def test_register_connection(self):
+        """Test registering a channel connection."""
+        conn = ChannelConnection(
+            id="conn-123",
+            name="Test",
+            channel_type="websocket",
+        )
+        
+        ChannelRegistry.register_connection(conn)
+        
+        retrieved = ChannelRegistry.get_connection("conn-123")
+        assert retrieved == conn
 
 
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+class TestWebSocketHandler:
+    """Test WebSocketHandler functionality."""
+
+    def test_long_connection_support(self):
+        """Test that WebSocketHandler supports long connection."""
+        assert WebSocketHandler.supports_long_connection is True
+        assert WebSocketHandler.supports_webhook is False
+
+    @pytest.mark.asyncio
+    async def test_setup(self):
+        """Test handler setup."""
+        handler = WebSocketHandler()
+        result = await handler.setup({"path": "/ws"})
+        
+        assert result is True
+        assert handler.config["path"] == "/ws"
+
+    @pytest.mark.asyncio
+    async def test_start_stop(self):
+        """Test handler start and stop."""
+        handler = WebSocketHandler()
+        
+        start_result = await handler.start(None)
+        assert start_result is True
+        assert handler.get_status() == ConnectionStatus.CONNECTED
+        
+        stop_result = await handler.stop()
+        assert stop_result is True
+        assert handler.get_status() == ConnectionStatus.DISCONNECTED
+
+    @pytest.mark.asyncio
+    async def test_handle_inbound_json(self):
+        """Test handling inbound JSON message."""
+        handler = WebSocketHandler()
+        
+        json_data = json.dumps({
+            "message_id": "msg-123",
+            "sender_id": "user-456",
+            "sender_name": "Test User",
+            "chat_id": "chat-789",
+            "content": "Hello",
+        })
+        
+        inbound = await handler.handle_inbound(json_data)
+        
+        assert inbound is not None
+        assert inbound.message_id == "msg-123"
+        assert inbound.content == "Hello"
+        assert inbound.channel_type == "websocket"
+
+    @pytest.mark.asyncio
+    async def test_handle_inbound_dict(self):
+        """Test handling inbound dict message."""
+        handler = WebSocketHandler()
+        
+        data = {
+            "message_id": "msg-123",
+            "sender_id": "user-456",
+            "sender_name": "Test User",
+            "chat_id": "chat-789",
+            "content": "Hello",
+        }
+        
+        inbound = await handler.handle_inbound(data)
+        
+        assert inbound is not None
+        assert inbound.message_id == "msg-123"
+
+    @pytest.mark.asyncio
+    async def test_validate_config(self):
+        """Test configuration validation."""
+        handler = WebSocketHandler()
+        
+        result = await handler.validate_config({"path": "/ws"})
+        
+        assert isinstance(result, ChannelValidationResult)
+        assert result.valid is True
+
+    def test_describe_schema(self):
+        """Test schema description."""
+        handler = WebSocketHandler()
+        
+        schema = handler.describe_schema()
+        
+        assert schema["type"] == "object"
+        assert "properties" in schema
+
+    def test_class_attributes(self):
+        """Test handler class attributes."""
+        assert WebSocketHandler.channel_type == "websocket"
+        assert WebSocketHandler.channel_name == "WebSocket"
+        assert WebSocketHandler.channel_mode == ChannelMode.BIDIRECTIONAL
+
+    @pytest.mark.asyncio
+    async def test_connect_disconnect(self):
+        """Test long connection methods."""
+        handler = WebSocketHandler()
+        
+        # WebSocketHandler supports long connection
+        assert handler.supports_long_connection is True
+        
+        # Base implementation returns False (subclasses should override)
+        # For WebSocketHandler, connect() is called in start()
+        result = await handler.connect()
+        # Base class returns False, subclasses should return True
+        assert result is False  # Base implementation
+        
+        # disconnect() should return True (base implementation)
+        result = await handler.disconnect()
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_reconnect(self):
+        """Test reconnect method."""
+        handler = WebSocketHandler()
+        
+        # reconnect() calls disconnect() then connect()
+        result = await handler.reconnect()
+        # Base implementation returns False after connect() fails
+        assert result is False
+
+    def test_message_callback(self):
+        """Test message callback functionality."""
+        handler = WebSocketHandler()
+        
+        messages = []
+        def callback(msg):
+            messages.append(msg)
+        
+        handler.set_message_callback(callback)
+        
+        # Simulate message received
+        from app.atlasclaw.channels.models import InboundMessage
+        msg = InboundMessage(
+            message_id="test-123",
+            sender_id="user-456",
+            sender_name="Test",
+            chat_id="chat-789",
+            channel_type="websocket",
+            content="Hello"
+        )
+        handler._on_message_received(msg)
+        
+        assert len(messages) == 1
+        assert messages[0].message_id == "test-123"
+
+
+class TestSSEHandler:
+    """Test SSEHandler functionality."""
+
+    def test_long_connection_support(self):
+        """Test that SSEHandler supports long connection."""
+        assert SSEHandler.supports_long_connection is True
+        assert SSEHandler.supports_webhook is False
+
+    @pytest.mark.asyncio
+    async def test_start_stop(self):
+        """Test handler start and stop."""
+        handler = SSEHandler()
+        
+        start_result = await handler.start(None)
+        assert start_result is True
+        
+        stop_result = await handler.stop()
+        assert stop_result is True
+
+    @pytest.mark.asyncio
+    async def test_handle_inbound_returns_none(self):
+        """Test that SSE handler returns None for inbound (outbound-only)."""
+        handler = SSEHandler()
+        
+        result = await handler.handle_inbound({})
+        
+        assert result is None
+
+    def test_class_attributes(self):
+        """Test handler class attributes."""
+        assert SSEHandler.channel_type == "sse"
+        assert SSEHandler.channel_mode == ChannelMode.OUTBOUND
+
+
+class TestRESTHandler:
+    """Test RESTHandler functionality."""
+
+    def test_webhook_support(self):
+        """Test that RESTHandler supports webhook mode."""
+        assert RESTHandler.supports_long_connection is False
+        assert RESTHandler.supports_webhook is True
+
+    @pytest.mark.asyncio
+    async def test_setup(self):
+        """Test handler setup."""
+        handler = RESTHandler()
+        result = await handler.setup({"webhook_url": "http://example.com/webhook"})
+        
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_validate_config(self):
+        """Test configuration validation."""
+        handler = RESTHandler()
+        
+        result = await handler.validate_config({"webhook_url": "http://example.com"})
+        
+        assert isinstance(result, ChannelValidationResult)
+        assert result.valid is True
+
+    def test_class_attributes(self):
+        """Test handler class attributes."""
+        assert RESTHandler.channel_type == "rest"
+        assert RESTHandler.channel_mode == ChannelMode.BIDIRECTIONAL
+
+
+class TestChannelStore:
+    """Test ChannelStore functionality."""
+
+    def setup_method(self):
+        """Create temporary directory for tests."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.store = ChannelStore(self.temp_dir)
+
+    def test_get_connections_empty(self):
+        """Test getting connections when none exist."""
+        connections = self.store.get_connections("user-123", "websocket")
+        
+        assert connections == []
+
+    def test_save_and_get_connection(self):
+        """Test saving and retrieving a connection."""
+        conn = ChannelConnection(
+            id="conn-123",
+            name="Test Connection",
+            channel_type="websocket",
+            config={"path": "/ws"},
+        )
+        
+        result = self.store.save_connection("user-123", "websocket", conn)
+        assert result is True
+        
+        connections = self.store.get_connections("user-123", "websocket")
+        assert len(connections) == 1
+        assert connections[0].id == "conn-123"
+        assert connections[0].name == "Test Connection"
+
+    def test_get_specific_connection(self):
+        """Test getting a specific connection by ID."""
+        conn = ChannelConnection(
+            id="conn-123",
+            name="Test",
+            channel_type="websocket",
+        )
+        
+        self.store.save_connection("user-123", "websocket", conn)
+        
+        retrieved = self.store.get_connection("user-123", "websocket", "conn-123")
+        assert retrieved is not None
+        assert retrieved.id == "conn-123"
+
+    def test_delete_connection(self):
+        """Test deleting a connection."""
+        conn = ChannelConnection(
+            id="conn-123",
+            name="Test",
+            channel_type="websocket",
+        )
+        
+        self.store.save_connection("user-123", "websocket", conn)
+        result = self.store.delete_connection("user-123", "websocket", "conn-123")
+        
+        assert result is True
+        
+        connections = self.store.get_connections("user-123", "websocket")
+        assert len(connections) == 0
+
+    def test_update_connection_status(self):
+        """Test updating connection enabled status."""
+        conn = ChannelConnection(
+            id="conn-123",
+            name="Test",
+            channel_type="websocket",
+            enabled=True,
+        )
+        
+        self.store.save_connection("user-123", "websocket", conn)
+        result = self.store.update_connection_status("user-123", "websocket", "conn-123", False)
+        
+        assert result is True
+        
+        retrieved = self.store.get_connection("user-123", "websocket", "conn-123")
+        assert retrieved.enabled is False
+
+    def test_multiple_connections(self):
+        """Test storing multiple connections for same user and type."""
+        conn1 = ChannelConnection(id="conn-1", name="Conn 1", channel_type="websocket")
+        conn2 = ChannelConnection(id="conn-2", name="Conn 2", channel_type="websocket")
+        
+        self.store.save_connection("user-123", "websocket", conn1)
+        self.store.save_connection("user-123", "websocket", conn2)
+        
+        connections = self.store.get_connections("user-123", "websocket")
+        assert len(connections) == 2
+
+    def test_user_isolation(self):
+        """Test that connections are isolated by user."""
+        conn = ChannelConnection(
+            id="conn-123",
+            name="Test",
+            channel_type="websocket",
+        )
+        
+        self.store.save_connection("user-123", "websocket", conn)
+        
+        user1_connections = self.store.get_connections("user-123", "websocket")
+        user2_connections = self.store.get_connections("user-456", "websocket")
+        
+        assert len(user1_connections) == 1
+        assert len(user2_connections) == 0

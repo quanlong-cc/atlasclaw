@@ -6,7 +6,7 @@ This repository contains the AtlasClaw core implementation, including the agent 
 
 ## Background
 
-Enterprise software teams often need to work across CRM, ITSM, Monitoring, HR, Finance, and other internal systems. The challenge is not only system fragmentation, but also the mismatch between data models, workflow boundaries, authorization models, and user experience across those systems.
+Enterprise software teams often need to work across CRM, ITSM, Monitoring, HR, Finance, OA and other internal systems. The challenge is not only system fragmentation, but also the mismatch between data models, workflow boundaries, authorization models, and user experience across those systems.
 
 AtlasClaw is designed around two practical developer questions:
 
@@ -141,6 +141,7 @@ AtlasClaw uses `atlasclaw.json` for configuration. Create a configuration file i
 Configuration options:
 
 - `providers_root` - Root directory for external provider templates and skills, resolved relative to `atlasclaw.json`
+- Provider skills discovered under `providers_root` are registered as `provider:skill` to avoid name collisions
 - `model.primary` - Primary model in format `provider/model-name`
 - `model.providers` - Provider configurations with `base_url`, `api_key`, and `api_type`
 - `api_type` - API type: `openai` (default) or `anthropic`

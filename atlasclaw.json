@@ -7,7 +7,7 @@
     "providers": {
       "deepseek": {
         "base_url": "https://api.deepseek.com",
-        "api_key": "${DS_API_KEY}",
+        "api_key": "${DEEPSEEK_API_KEY}",
         "api_type": "openai"
       }
     }
@@ -24,16 +24,16 @@
     }
   },
   "webhook": {
-    "enabled": true,
-    "header_name": "X-AtlasClaw-SK",
+    "enabled": false,
+    "header_name": "X-UniClaw-SK",
     "skill_sources": [
       {
         "provider": "smartcmp",
-        "root": "SmartCMP-Provider/skills"
+        "root": "../UniClaw-Providers/SmartCMP-Provider/skills"
       },
       {
         "provider": "jira",
-        "root": "jira/skills"
+        "root": "app/atlasclaw/providers/jira/skills"
       }
     ],
     "systems": [

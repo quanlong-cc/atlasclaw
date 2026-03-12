@@ -19,11 +19,39 @@ export async function initChat(element) {
     chatElement = element;
 
     await initSession();
+    
+    // Load agent info and set welcome message
+    await loadAgentInfo(element);
+    
     configureChatConnection(element);
     configureInterceptors(element);
     configureI18nAttributes(element);
 
     console.log('[ChatUI] Initialized');
+}
+
+/**
+ * Load agent information and set welcome message
+ * @param {HTMLElement} element - DeepChat DOM element
+ */
+async function loadAgentInfo(element) {
+    try {
+        const response = await fetch('/api/agent/info');
+        if (response.ok) {
+            const agentInfo = await response.json();
+            console.log('[ChatUI] Agent info loaded:', agentInfo);
+            
+            // Set welcome message
+            if (agentInfo.welcome_message) {
+                element.introMessage = {
+                    text: agentInfo.welcome_message,
+                    role: 'ai'
+                };
+            }
+        }
+    } catch (error) {
+        console.error('[ChatUI] Failed to load agent info:', error);
+    }
 }
 
 function configureChatConnection(element) {

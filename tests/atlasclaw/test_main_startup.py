@@ -56,10 +56,11 @@ class TestMainStartup:
             resp = client.get("/api/health")
             assert resp.status_code == 200
             assert resp.json()["status"] == "healthy"
-            skills_resp = client.get("/api/skills")
-            assert skills_resp.status_code == 200
-            skill_names = [s["name"] for s in skills_resp.json()["skills"]]
-            assert "jira-issue" in skill_names, "应该从 providers_root 加载外部 Jira skill"
+            from app.atlasclaw.api.routes import get_api_context
+
+            qualified_names = set(get_api_context().skill_registry.list_md_qualified_skills())
+            assert "jira:jira-issue" in qualified_names, "should load the external Jira skill as provider-qualified"
+            assert "smartcmp:preapproval-agent" in qualified_names, "should load SmartCMP skills as provider-qualified"
 
 
 

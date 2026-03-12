@@ -23,7 +23,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from ..session.manager import SessionManager
-from ..session.context import SessionKey, SessionScope, ChatType as SessionChatType
+from ..session.context import SessionKey, SessionScope, ChatType
 from ..session.queue import SessionQueue, QueueMode
 from ..skills.registry import SkillRegistry
 from ..memory.manager import MemoryManager
@@ -260,11 +260,19 @@ def _build_scoped_deps(
     extra: Optional[dict[str, Any]] = None,
 ) -> SkillDeps:
     """Create request-scoped dependencies for agent-style execution."""
-    scoped_session_mgr = SessionManager(
-        agents_dir=str(ctx.session_manager.agents_dir),
-        agent_id=ctx.session_manager.agent_id,
-        user_id=user_info.user_id,
-    )
+    # Check if session manager is in legacy mode
+    if getattr(ctx.session_manager, '_legacy_mode', False):
+        scoped_session_mgr = SessionManager(
+            agents_dir=str(ctx.session_manager.agents_dir),
+            agent_id=ctx.session_manager.agent_id,
+            user_id=user_info.user_id,
+        )
+    else:
+        # Use workspace-based session manager
+        scoped_session_mgr = SessionManager(
+            workspace_path=str(ctx.session_manager.workspace_path),
+            user_id=user_info.user_id,
+        )
     scoped_memory_mgr: Optional[MemoryManager] = None
     if ctx.memory_manager is not None:
         scoped_memory_mgr = MemoryManager(
@@ -466,7 +474,7 @@ def create_router() -> APIRouter:
         key = SessionKey(
             agent_id=request.agent_id,
             channel=request.channel,
-            chat_type=request.chat_type,
+            chat_type=ChatType(request.chat_type),
             user_id=auth_user.user_id,
         )
         session_key_str = key.to_string(scope=SessionScope(request.scope))
@@ -687,8 +695,10 @@ def create_router() -> APIRouter:
                 "type": "executable"
             })
         for s in md_skills:
+            # Use qualified_name if available (includes provider prefix)
+            name = s.get("qualified_name") or s["name"]
             all_skills.append({
-                "name": s["name"],
+                "name": name,
                 "description": s["description"],
                 "category": s.get("metadata", {}).get("category", "skill"),
                 "type": "markdown"
@@ -780,7 +790,7 @@ def create_router() -> APIRouter:
             agent_id=agent_id,
             user_id=f"webhook-{system.system_id}",
             channel="webhook",
-            chat_type=SessionChatType.DM,
+            chat_type=ChatType.DM,
             peer_id=system.system_id,
         ).to_string(scope=SessionScope.PER_CHANNEL_PEER)
 

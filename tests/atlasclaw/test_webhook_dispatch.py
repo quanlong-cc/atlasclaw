@@ -29,7 +29,6 @@ from app.atlasclaw.api.routes import APIContext, create_router, set_api_context
 from app.atlasclaw.api.webhook_dispatch import WebhookDispatchManager
 from app.atlasclaw.core.config_schema import (
     WebhookConfig,
-    WebhookSkillSourceConfig,
     WebhookSystemConfig,
 )
 from app.atlasclaw.session.manager import SessionManager
@@ -81,9 +80,6 @@ def _build_client(tmp_path: Path, monkeypatch, *, allowed_skills: list[str]) -> 
     webhook_config = WebhookConfig(
         enabled=True,
         header_name="X-AtlasClaw-SK",
-        skill_sources=[
-            WebhookSkillSourceConfig(provider="smartcmp", root=str(tmp_path / "skills"))
-        ],
         systems=[
             WebhookSystemConfig(
                 system_id="smartcmp-preapproval",
@@ -130,9 +126,6 @@ class TestWebhookDispatchManager:
         manager = WebhookDispatchManager(
             WebhookConfig(
                 enabled=True,
-                skill_sources=[
-                    WebhookSkillSourceConfig(provider="smartcmp", root=str(tmp_path / "skills"))
-                ],
                 systems=[
                     WebhookSystemConfig(
                         system_id="smartcmp-preapproval",

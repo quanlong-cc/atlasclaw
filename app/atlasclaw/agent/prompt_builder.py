@@ -323,7 +323,8 @@ Build the Markdown skills XML index section plus execution instructions.
         shown = 0
 
         for s in candidates:
-            name = s.get("name", "unknown")
+            # Use qualified_name if available (includes provider prefix)
+            name = s.get("qualified_name") or s.get("name", "unknown")
             desc = s.get("description", "")
             file_path = s.get("file_path", "")
 

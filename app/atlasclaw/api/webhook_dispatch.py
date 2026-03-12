@@ -63,8 +63,6 @@ class WebhookDispatchManager:
         """Fail fast when webhook config references missing env vars or skills."""
         if not self.enabled:
             return
-        if not self._config.skill_sources:
-            raise RuntimeError("webhook.skill_sources must not be empty when webhook.enabled=true")
         if not self._config.systems:
             raise RuntimeError("webhook.systems must not be empty when webhook.enabled=true")
 

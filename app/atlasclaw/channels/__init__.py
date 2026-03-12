@@ -1,29 +1,32 @@
-"""Channel adapter interfaces and built-in adapter exports."""
+# -*- coding: utf-8 -*-
+"""Channel management for AtlasClaw."""
 
-from app.atlasclaw.channels.base import (
-    ChannelAdapter,
-    ChannelMessage,
-    ChannelConfig,
-    MessageChunk,
-    TypingIndicator,
+from __future__ import annotations
+
+from .handler import ChannelHandler
+from .manager import ChannelManager
+from .models import (
+    ChannelConnection,
+    ChannelMode,
+    ChannelValidationResult,
+    ConnectionStatus,
+    InboundMessage,
+    OutboundMessage,
+    SendResult,
 )
-from app.atlasclaw.channels.registry import (
-    ChannelAdapterRegistry,
-    create_adapter,
-)
-from app.atlasclaw.channels.websocket_adapter import WebSocketAdapter
-from app.atlasclaw.channels.sse_adapter import SSEAdapter
-from app.atlasclaw.channels.rest_adapter import RESTCallbackAdapter
+from .registry import ChannelRegistry
+from .store import ChannelStore
 
 __all__ = [
-    "ChannelAdapter",
-    "ChannelMessage",
-    "ChannelConfig",
-    "MessageChunk",
-    "TypingIndicator",
-    "ChannelAdapterRegistry",
-    "create_adapter",
-    "WebSocketAdapter",
-    "SSEAdapter",
-    "RESTCallbackAdapter",
+    "ChannelHandler",
+    "ChannelManager",
+    "ChannelRegistry",
+    "ChannelStore",
+    "ChannelConnection",
+    "ChannelMode",
+    "ChannelValidationResult",
+    "ConnectionStatus",
+    "InboundMessage",
+    "OutboundMessage",
+    "SendResult",
 ]
