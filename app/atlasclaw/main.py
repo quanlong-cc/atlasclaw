@@ -29,6 +29,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.atlasclaw.api.routes import create_router, APIContext, install_request_validation_logging, set_api_context
 from app.atlasclaw.api.webhook_dispatch import WebhookDispatchManager
 from app.atlasclaw.api.channel_hooks import router as channel_hooks_router
+from app.atlasclaw.api.channels import router as channels_router, set_channel_manager
 from app.atlasclaw.api.agent_info import router as agent_info_router
 from app.atlasclaw.session.manager import SessionManager
 from app.atlasclaw.session.queue import SessionQueue
@@ -43,7 +44,11 @@ from app.atlasclaw.core.provider_scanner import ProviderScanner
 from app.atlasclaw.core.workspace import WorkspaceInitializer, UserWorkspaceInitializer
 from app.atlasclaw.agent.agent_definition import AgentLoader
 from app.atlasclaw.channels import ChannelRegistry
-from app.atlasclaw.channels.handlers import WebSocketHandler, SSEHandler, RESTHandler
+from app.atlasclaw.channels.manager import ChannelManager
+# Import channel handlers from providers
+from providers.feishu.channels.feishu import FeishuHandler
+from providers.dingtalk.channels.dingtalk import DingTalkHandler
+from providers.wecom.channels.wecom import WeComHandler
 from app.atlasclaw.auth import AuthRegistry
 
 
@@ -55,6 +60,7 @@ _session_manager: Optional[SessionManager] = None
 _session_queue: Optional[SessionQueue] = None
 _skill_registry: Optional[SkillRegistry] = None
 _agent_runner: Optional[AgentRunner] = None
+_channel_manager: Optional[ChannelManager] = None
 
 
 def _derive_provider_namespace(provider_dir_name: str) -> str:
@@ -109,7 +115,7 @@ def _check_and_prompt_for_providers_skills(workspace_path: str | Path, providers
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan handler for startup and shutdown."""
-    global _session_manager, _session_queue, _skill_registry, _agent_runner, _global_provider_registry
+    global _session_manager, _session_queue, _skill_registry, _agent_runner, _global_provider_registry, _channel_manager
     
     config = get_config()
     config_path = get_config_path()
@@ -134,11 +140,16 @@ async def lifespan(app: FastAPI):
         default_user_initializer.initialize()
         print(f"[AtlasClaw] Initialized default user directory")
     
-    # Register built-in channel handlers
-    ChannelRegistry.register("websocket", WebSocketHandler)
-    ChannelRegistry.register("sse", SSEHandler)
-    ChannelRegistry.register("rest", RESTHandler)
+    # Register built-in channel handlers (enterprise messaging platforms)
+    ChannelRegistry.register("feishu", FeishuHandler)
+    ChannelRegistry.register("dingtalk", DingTalkHandler)
+    ChannelRegistry.register("wecom", WeComHandler)
     print(f"[AtlasClaw] Registered built-in channel handlers")
+    
+    # Initialize ChannelManager
+    _channel_manager = ChannelManager(workspace_path)
+    set_channel_manager(_channel_manager)
+    print(f"[AtlasClaw] Channel manager initialized")
     
     # Scan providers for channel and auth extensions
     providers_dir = Path(workspace_path) / ".atlasclaw" / "providers"
@@ -367,6 +378,14 @@ def create_app() -> FastAPI:
                 return FileResponse(str(index_path))
             return {"error": "Frontend not found"}
         
+        # Serve channels.html for channel management
+        @app.get("/channels.html", include_in_schema=False)
+        async def serve_channels():
+            channels_path = frontend_dir / "channels.html"
+            if channels_path.exists():
+                return FileResponse(str(channels_path))
+            return {"error": "Channels page not found"}
+        
         # Serve config.json
         @app.get("/config.json", include_in_schema=False)
         async def serve_config():
@@ -381,6 +400,9 @@ def create_app() -> FastAPI:
     
     # Include channel webhook routes
     app.include_router(channel_hooks_router)
+    
+    # Include channel management routes
+    app.include_router(channels_router)
     
     # Include agent info routes
     app.include_router(agent_info_router)
