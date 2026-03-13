@@ -108,6 +108,7 @@ class PromptBuilder:
         md_skills: Optional[list[dict]] = None,
         target_md_skill: Optional[dict] = None,
         user_info: Optional["UserInfo"] = None,
+        provider_contexts: Optional[dict[str, dict]] = None,
     ) -> str:
         """
         Build the full system prompt for the current run.
@@ -117,6 +118,7 @@ class PromptBuilder:
             skills: Executable skill metadata available to the agent.
             tools: Tool metadata exposed to the current agent.
             md_skills: Optional Markdown skill snapshot for prompt injection.
+            provider_contexts: Optional provider LLM context for skill discovery.
 
         Returns:
             The assembled system prompt text.
@@ -145,7 +147,7 @@ class PromptBuilder:
         if self.config.mode == PromptMode.FULL:
             # 4. Markdown skill index (HIGHEST PRIORITY - check these first!)
             if md_skills:
-                md_index = self._build_md_skills_index(md_skills)
+                md_index = self._build_md_skills_index(md_skills, provider_contexts)
                 if md_index:
                     parts.append(md_index)
             
@@ -274,27 +276,25 @@ class PromptBuilder:
         lines.append("\nNOTE: These built-in tools are fallback options. ALWAYS check MD Skills section above first.")
         return "\n".join(lines)
     
-    def _build_md_skills_index(self, md_skills: list[dict]) -> str:
+    def _build_md_skills_index(
+        self,
+        md_skills: list[dict],
+        provider_contexts: Optional[dict[str, dict]] = None,
+    ) -> str:
         """
+        Build the Markdown skills XML index section with provider context.
 
+        Groups skills by provider and includes LLM context fields for better
+        skill selection. Provider context (keywords, capabilities, use_when,
+        avoid_when) helps LLM understand when to use each provider.
 
-Build the Markdown skills XML index section plus execution instructions.
+        Args:
+            md_skills: MD Skills snapshot list
+            provider_contexts: Optional provider LLM context dictionary
 
- Open-Claw``for mat-Skills-For-Prompt``align:contains
- name / description / location(file path), Agent.
-
- truncate:
- 1. item description desc_max_chars truncate
- 2. entry count max_count N item
- 3. in dex_max_chars item truncate
-
- Args:
- md_skills:MD Skills snapshot list
-
- Returns:
- in dex section(return``""``)
- 
-"""
+        Returns:
+            index section (returns "" if empty)
+        """
         if not md_skills:
             return ""
 
@@ -302,59 +302,170 @@ Build the Markdown skills XML index section plus execution instructions.
         desc_max = self.config.md_skills_desc_max_chars
         budget = self.config.md_skills_max_index_chars
         home_prefix = str(Path.home())
+        provider_contexts = provider_contexts or {}
 
-        # three core execution instructions
+        # Execution instructions
         instructions = (
             "When a user's task matches a skill description below:\n"
             "1. Use the `read` tool to load the SKILL.md at the given location\n"
             "2. Follow the instructions in the SKILL.md to execute the task\n"
-            "3. Use the available tools (exec, read, write, edit, etc.) as needed"
+            "3. Use the available tools (exec, read, write, edit, etc.) as needed\n\n"
+            "SKILL SELECTION GUIDANCE:\n"
+            "- Check 'use_when' conditions to confirm the skill applies\n"
+            "- Check 'avoid_when' conditions to ensure you're using the right skill\n"
+            "- Use 'triggers' keywords to match user intent"
         )
 
-        header = f"## MD Skills\n\n{instructions}\n\n<available_skills>\n"
-        footer = "</available_skills>"
+        header = f"## MD Skills\n\n{instructions}\n\n"
 
-        # max_count item
-        candidates = md_skills[:max_count]
-        total_count = len(md_skills)
+        # Group skills by provider
+        provider_skills: dict[str, list[dict]] = {}
+        standalone_skills: list[dict] = []
+
+        for skill in md_skills[:max_count]:
+            provider = skill.get("provider", "")
+            if provider:
+                provider_skills.setdefault(provider, []).append(skill)
+            else:
+                standalone_skills.append(skill)
 
         accumulated = header
+        total_count = len(md_skills)
         shown = 0
 
-        for s in candidates:
-            # Use qualified_name if available (includes provider prefix)
+        # Helper function to format a skill entry
+        def format_skill(s: dict) -> str:
             name = s.get("qualified_name") or s.get("name", "unknown")
             desc = s.get("description", "")
             file_path = s.get("file_path", "")
+            metadata = s.get("metadata", {})
 
-            # descriptiontruncate
+            # Truncate description
             if len(desc) > desc_max:
                 desc = desc[: desc_max - 3] + "..."
 
-            # :user ~
+            # Shorten home path
             if home_prefix and file_path.startswith(home_prefix):
-                file_path = "~" + file_path[len(home_prefix) :]
+                file_path = "~" + file_path[len(home_prefix):]
 
-            entry = (
-                f"  <skill>\n"
-                f"    <name>{name}</name>\n"
-                f"    <description>{desc}</description>\n"
-                f"    <location>{file_path}</location>\n"
-                f"  </skill>\n"
-            )
+            lines = [
+                f"    <skill>",
+                f"      <name>{name}</name>",
+                f"      <description>{desc}</description>",
+                f"      <location>{file_path}</location>",
+            ]
 
-            if len(accumulated) + len(entry) + len(footer) > budget:
-                # , truncate
-                truncation_note = (
-                    f"  <!-- Showing {shown} of {total_count} skills -->\n"
-                )
-                accumulated += truncation_note
+            # Add LLM context fields if present
+            triggers = metadata.get("triggers", [])
+            if triggers and isinstance(triggers, list):
+                lines.append(f"      <triggers>{', '.join(triggers)}</triggers>")
+
+            use_when = metadata.get("use_when", [])
+            if use_when and isinstance(use_when, list):
+                lines.append(f"      <use_when>")
+                for condition in use_when[:3]:  # Limit to 3
+                    lines.append(f"        - {condition}")
+                lines.append(f"      </use_when>")
+
+            avoid_when = metadata.get("avoid_when", [])
+            if avoid_when and isinstance(avoid_when, list):
+                lines.append(f"      <avoid_when>")
+                for condition in avoid_when[:3]:  # Limit to 3
+                    lines.append(f"        - {condition}")
+                lines.append(f"      </avoid_when>")
+
+            examples = metadata.get("examples", [])
+            if examples and isinstance(examples, list):
+                lines.append(f"      <examples>")
+                for ex in examples[:2]:  # Limit to 2
+                    lines.append(f"        - {ex}")
+                lines.append(f"      </examples>")
+
+            lines.append(f"    </skill>")
+            return "\n".join(lines) + "\n"
+
+        # Helper to format provider context
+        def format_provider_context(provider_type: str, ctx: dict) -> str:
+            lines = [f"  <provider type=\"{provider_type}\">"]
+
+            display_name = ctx.get("display_name", provider_type)
+            if display_name:
+                lines.append(f"    <display_name>{display_name}</display_name>")
+
+            description = ctx.get("description", "")
+            if description:
+                # Truncate description to 200 chars
+                if len(description) > 200:
+                    description = description[:197] + "..."
+                lines.append(f"    <description>{description}</description>")
+
+            keywords = ctx.get("keywords", [])
+            if keywords and isinstance(keywords, list):
+                lines.append(f"    <keywords>{', '.join(keywords[:10])}</keywords>")
+
+            capabilities = ctx.get("capabilities", [])
+            if capabilities and isinstance(capabilities, list):
+                lines.append(f"    <capabilities>")
+                for cap in capabilities[:5]:  # Limit to 5
+                    lines.append(f"      - {cap}")
+                lines.append(f"    </capabilities>")
+
+            use_when = ctx.get("use_when", [])
+            if use_when and isinstance(use_when, list):
+                lines.append(f"    <use_when>")
+                for condition in use_when[:3]:
+                    lines.append(f"      - {condition}")
+                lines.append(f"    </use_when>")
+
+            avoid_when = ctx.get("avoid_when", [])
+            if avoid_when and isinstance(avoid_when, list):
+                lines.append(f"    <avoid_when>")
+                for condition in avoid_when[:3]:
+                    lines.append(f"      - {condition}")
+                lines.append(f"    </avoid_when>")
+
+            lines.append(f"    <skills>")
+            return "\n".join(lines) + "\n"
+
+        # Build provider sections
+        accumulated += "<available_skills>\n"
+
+        for provider_type, skills_list in sorted(provider_skills.items()):
+            ctx = provider_contexts.get(provider_type, {})
+
+            # Add provider context header
+            provider_header = format_provider_context(provider_type, ctx)
+            if len(accumulated) + len(provider_header) > budget:
                 break
+            accumulated += provider_header
 
-            accumulated += entry
-            shown += 1
+            # Add skills under this provider
+            for s in skills_list:
+                entry = format_skill(s)
+                if len(accumulated) + len(entry) + 50 > budget:  # Reserve for closing tags
+                    break
+                accumulated += entry
+                shown += 1
 
-        accumulated += footer
+            # Close provider section
+            accumulated += "    </skills>\n  </provider>\n"
+
+        # Add standalone skills (no provider)
+        if standalone_skills:
+            accumulated += "  <standalone_skills>\n"
+            for s in standalone_skills:
+                entry = format_skill(s)
+                if len(accumulated) + len(entry) + 50 > budget:
+                    break
+                accumulated += entry
+                shown += 1
+            accumulated += "  </standalone_skills>\n"
+
+        # Add truncation note if needed
+        if shown < total_count:
+            accumulated += f"  <!-- Showing {shown} of {total_count} skills -->\n"
+
+        accumulated += "</available_skills>"
         return accumulated
     
     def _build_self_update(self) -> str:

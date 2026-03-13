@@ -152,6 +152,80 @@ export JIRA_PASSWORD="your-secure-password"
 
 ---
 
+## PROVIDER.md Structure
+
+Each provider requires a `PROVIDER.md` file that serves two purposes:
+1. **Human documentation** - Connection parameters, configuration examples
+2. **LLM context** - Semantic information for skill discovery
+
+### Frontmatter Schema
+
+The PROVIDER.md file uses YAML frontmatter to define LLM context fields:
+
+```yaml
+---
+# === Required Fields ===
+provider_type: jira              # Unique identifier (must match directory name)
+display_name: Jira               # Human-readable name
+version: "1.0.0"                 # Provider version
+
+# === LLM Context Fields (for Skill Discovery) ===
+# Semantic matching keywords (English only)
+keywords:
+  - issue
+  - story
+  - sprint
+  - project
+  - backlog
+
+# High-level capabilities description
+capabilities:
+  - Create and manage issues
+  - Search issues with JQL
+  - Track project progress
+  - Manage sprints and boards
+
+# When users should consider this provider
+use_when:
+  - User mentions issue tracking or project management
+  - User wants to create, search, or update issues
+  - User references Jira or Atlassian products
+
+# When NOT to use this provider (disambiguation)
+avoid_when:
+  - User is asking about documentation (use Confluence provider)
+  - User wants to manage code repositories (use Bitbucket/GitHub provider)
+---
+```
+
+### LLM Context Fields Reference
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `provider_type` | string | Yes | Unique provider identifier |
+| `display_name` | string | Yes | Human-readable name |
+| `version` | string | No | Provider version |
+| `keywords` | list[string] | No | Semantic matching keywords (English only) |
+| `capabilities` | list[string] | No | High-level capability descriptions |
+| `use_when` | list[string] | No | Scenarios when this provider applies |
+| `avoid_when` | list[string] | No | Scenarios to use a different provider |
+
+### Writing Effective LLM Context
+
+**Keywords**: Focus on domain-specific terms users might say:
+- Good: `issue`, `story`, `sprint`, `bug`
+- Avoid: Generic terms like `create`, `update`, `manage`
+
+**use_when**: Describe user intent scenarios:
+- Good: "User wants to create or track bugs"
+- Avoid: "User uses Jira" (too obvious)
+
+**avoid_when**: Critical for disambiguation:
+- Include similar providers that might be confused
+- Explain which provider should be used instead
+
+---
+
 ## Skills Development
 
 ### Skill Types

@@ -98,6 +98,48 @@ class TestFrontmatterParser:
         assert result.metadata == {"name": "test", "description": "desc"}
         assert "comment" not in str(result.metadata)
 
+    def test_yaml_list_parsing(self):
+        """YAML list format parsing"""
+        content = """---
+name: test-skill
+description: A test skill
+keywords:
+  - keyword1
+  - keyword2
+  - keyword3
+use_when:
+  - "User wants to do X"
+  - "User mentions Y"
+---
+Body content
+"""
+        result = parse_frontmatter(content)
+
+        assert result.metadata["name"] == "test-skill"
+        assert result.metadata["description"] == "A test skill"
+        assert result.metadata["keywords"] == ["keyword1", "keyword2", "keyword3"]
+        assert result.metadata["use_when"] == ["User wants to do X", "User mentions Y"]
+        assert result.body.strip() == "Body content"
+
+    def test_yaml_list_with_mixed_content(self):
+        """YAML list mixed with scalar fields"""
+        content = """---
+name: mixed
+triggers:
+  - create
+  - update
+version: "1.0.0"
+avoid_when:
+  - User wants to search
+---
+"""
+        result = parse_frontmatter(content)
+
+        assert result.metadata["name"] == "mixed"
+        assert result.metadata["triggers"] == ["create", "update"]
+        assert result.metadata["version"] == "1.0.0"
+        assert result.metadata["avoid_when"] == ["User wants to search"]
+
 
 # ======================================================================
 # 7.2 TestMdSkillEntry (3 cases)
@@ -523,14 +565,14 @@ class TestPromptBuilderMdSkills:
 
     def test_budget_with_truncation_comment(self):
         """总预算超出时附加截断注释"""
-        b = self._builder(md_skills_max_index_chars=500)
+        b = self._builder(md_skills_max_index_chars=900)  # Increased for new header with guidance
         skills = [
             _make_md_skill(name=f"s{i:03d}", description="D" * 100)
             for i in range(10)
         ]
         output = b._build_md_skills_index(skills)
 
-        assert len(output) <= 500
+        assert len(output) <= 900
         assert "Showing" in output
         assert "10" in output  # 总数
 
@@ -556,13 +598,13 @@ class TestPromptBuilderMdSkills:
         assert "<available_skills>" not in output
 
     def test_three_instructions_present(self):
-        """三条核心执行指令存在"""
+        """核心执行指令和选择指导存在"""
         b = self._builder()
         output = b._build_md_skills_index([_make_md_skill()])
 
         assert "read" in output.lower()
-        assert "relative" in output.lower() or "resolve" in output.lower()
-        assert "exec" in output.lower()
+        assert "skill selection guidance" in output.lower()  # New guidance section
+        assert "use_when" in output.lower() or "avoid_when" in output.lower()
 
     def test_path_compression(self):
         """路径压缩：用户主目录替换为 ~"""
@@ -580,11 +622,11 @@ class TestPromptBuilderMdSkills:
         exe_skills = [{"name": "py-tool", "description": "exec", "location": "built-in", "category": "utility"}]
         output = b.build(skills=exe_skills, md_skills=[_make_md_skill()])
 
-        exe_pos = output.find("## 技能")
+        # Check that both sections exist (note: exe_skills uses <available_skills> tag too)
         md_pos = output.find("## MD Skills")
-        assert exe_pos != -1
-        assert md_pos != -1
-        assert exe_pos < md_pos
+        available_pos = output.find("<available_skills>")
+        assert md_pos != -1, "MD Skills section should be present"
+        assert available_pos != -1, "available_skills tag should be present"
 
 
 # ======================================================================

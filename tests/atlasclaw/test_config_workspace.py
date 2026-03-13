@@ -103,18 +103,18 @@ class TestConfigWorkspaceLoading:
 
         # Should have default values for missing items
         assert config.log_level.value == "debug"
-        assert config.workspace.path == "."  # default value
+        assert config.workspace.path == "./.atlasclaw"  # default value
 
 
 class TestWorkspaceConfigSchema:
     """Test WorkspaceConfig schema."""
 
     def test_workspace_config_defaults(self):
-        """场景：验证 WorkspaceConfig 默认值"""
+        """Test: Verify WorkspaceConfig defaults"""
         from app.atlasclaw.core.config_schema import WorkspaceConfig
 
         config = WorkspaceConfig()
-        assert config.path == "."
+        assert config.path == "./.atlasclaw"
         assert config.per_user_isolation is True
 
     def test_workspace_config_custom_values(self):

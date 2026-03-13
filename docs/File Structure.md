@@ -65,8 +65,8 @@ A **Workspace** is the root organizational unit containing all AtlasClaw resourc
 **Complete Directory Structure:**
 
 ```
-<workspace>/
-├── .atlasclaw/                          # System directory
+<project_root>/
+├── .atlasclaw/                          # Workspace directory (default)
 │   ├── agents/                          # Agent definitions
 │   │   └── main/                        # Default agent
 │   │       ├── SOUL.md                  # System prompt & capabilities
@@ -78,17 +78,17 @@ A **Workspace** is the root organizational unit containing all AtlasClaw resourc
 │   │   └── <skill-name>/
 │   │       ├── SKILL.md                 # Skill metadata
 │   │       └── scripts/                 # Skill implementation
-│   └── channels/                        # Channel configurations
-├── users/                               # User directories
-│   └── <user-id>/                       # Per-user directory
-│       ├── atlasclaw.json               # User-specific configuration
-│       ├── channels/                    # User channel configs
-│       ├── sessions/                    # Session storage
-│       │   ├── sessions.json            # Session metadata
-│       │   ├── <session-id>.jsonl       # Transcript files
-│       │   └── archive/                 # Archived transcripts
-│       └── memory/                      # Long-term memory storage
-├── atlasclaw.json                       # Workspace configuration
+│   ├── channels/                        # Channel configurations
+│   └── users/                           # User directories
+│       └── <user-id>/                   # Per-user directory
+│           ├── atlasclaw.json           # User-specific configuration
+│           ├── channels/                # User channel configs
+│           ├── sessions/                # Session storage
+│           │   ├── sessions.json        # Session metadata
+│           │   ├── <session-id>.jsonl   # Transcript files
+│           │   └── archive/             # Archived transcripts
+│           └── memory/                  # Long-term memory storage
+├── atlasclaw.json                       # Project configuration
 └── .gitignore                           # Git ignore rules
 ```
 

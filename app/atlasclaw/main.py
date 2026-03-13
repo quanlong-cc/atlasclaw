@@ -75,13 +75,12 @@ def _check_and_prompt_for_providers_skills(workspace_path: str | Path, providers
     """Check if providers_root and workspace skills directories are empty.
 
     Args:
-        workspace_path: Path to the workspace directory.
+        workspace_path: Path to the workspace directory (the .atlasclaw directory).
         providers_root: Resolved provider repository path.
     """
     workspace = Path(workspace_path)
-    atlasclaw_dir = workspace / ".atlasclaw"
     providers_dir = providers_root
-    skills_dir = atlasclaw_dir / "skills"
+    skills_dir = workspace / "skills"  # skills is directly under workspace
 
     def _is_empty_or_missing(dir_path: Path) -> bool:
         """Check if directory is empty or doesn't exist."""
@@ -201,8 +200,8 @@ async def lifespan(app: FastAPI):
 
 
 
-    # 2. Workspace provider skills (.atlasclaw/providers)
-    workspace_providers_dir = Path(workspace_path) / ".atlasclaw" / "providers"
+    # 2. Workspace provider skills (providers inside workspace)
+    workspace_providers_dir = Path(workspace_path) / "providers"
     if workspace_providers_dir.exists():
         for provider_path in workspace_providers_dir.iterdir():
             if provider_path.is_dir():
@@ -220,8 +219,8 @@ async def lifespan(app: FastAPI):
     if global_skills.exists():
         _skill_registry.load_from_directory(str(global_skills), location="global")
     
-    # 3. Workspace skills (highest priority)
-    workspace_skills = Path(workspace_path) / ".atlasclaw" / "skills"
+    # 4. Workspace skills (highest priority)
+    workspace_skills = Path(workspace_path) / "skills"
     if workspace_skills.exists():
         _skill_registry.load_from_directory(str(workspace_skills), location="workspace")
     

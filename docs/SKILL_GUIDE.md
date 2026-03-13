@@ -169,6 +169,52 @@ The `SKILL.md` file is the heart of a Skill. It defines:
 | `author` | Skill author | Optional | `team@company.com` |
 | `tags` | Skill tags | Optional | `["jira", "issue"]` |
 
+### LLM Context Fields (for Skill Discovery)
+
+These fields help the LLM accurately select the right skill:
+
+| Field | Type | Description | Example |
+|-------|------|-------------|---------|
+| `triggers` | list[string] | Keywords/phrases that trigger this skill | `["create issue", "report bug"]` |
+| `use_when` | list[string] | Scenarios when to use this skill | `["User wants to create a bug report"]` |
+| `avoid_when` | list[string] | Scenarios when NOT to use this skill | `["User wants to search issues"]` |
+| `examples` | list[string] | Example user inputs | `["Create a Jira issue for login bug"]` |
+| `related` | list[string] | Related skill names | `["jira-search", "jira-bulk"]` |
+
+**Example with LLM Context:**
+
+```yaml
+---
+name: "jira-issue"
+description: "Jira issue skill for CRUD operations"
+category: "provider:jira"
+provider_type: "jira"
+instance_required: "true"
+
+# LLM Context Fields
+triggers:
+  - create issue
+  - get issue
+  - report bug
+
+use_when:
+  - User wants to create, read, update, or delete Jira issues
+  - User mentions bug reports or incident logging
+
+avoid_when:
+  - User wants to search multiple issues (use jira-search skill)
+  - User wants bulk operations (use jira-bulk skill)
+
+examples:
+  - "Create a Jira issue for the login bug"
+  - "Get details for PROJ-123"
+
+related:
+  - jira-search
+  - jira-bulk
+---
+```
+
 ### Parameter Definition
 
 Parameters define what inputs the Skill accepts:

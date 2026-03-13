@@ -16,24 +16,26 @@ class TestWorkspaceInitializer:
     """Test WorkspaceInitializer functionality."""
 
     def test_initialize_creates_directory_structure(self, tmp_path):
-        """场景：首次创建工作区目录结构"""
-        initializer = WorkspaceInitializer(str(tmp_path))
+        """Test: Creates workspace directory structure"""
+        workspace = tmp_path / ".atlasclaw"
+        initializer = WorkspaceInitializer(str(workspace))
         result = initializer.initialize()
         
         assert result is True
-        assert (tmp_path / ".atlasclaw").exists()
-        assert (tmp_path / ".atlasclaw" / "agents").exists()
-        assert (tmp_path / ".atlasclaw" / "providers").exists()
-        assert (tmp_path / ".atlasclaw" / "skills").exists()
-        assert (tmp_path / ".atlasclaw" / "channels").exists()
-        assert (tmp_path / "users").exists()
+        assert workspace.exists()
+        assert (workspace / "agents").exists()
+        assert (workspace / "providers").exists()
+        assert (workspace / "skills").exists()
+        assert (workspace / "channels").exists()
+        assert (workspace / "users").exists()
 
     def test_initialize_creates_default_main_agent(self, tmp_path):
-        """场景：首次创建默认 main Agent"""
-        initializer = WorkspaceInitializer(str(tmp_path))
+        """Test: Creates default main Agent"""
+        workspace = tmp_path / ".atlasclaw"
+        initializer = WorkspaceInitializer(str(workspace))
         initializer.initialize()
         
-        main_agent_dir = tmp_path / ".atlasclaw" / "agents" / "main"
+        main_agent_dir = workspace / "agents" / "main"
         assert main_agent_dir.exists()
         assert (main_agent_dir / "SOUL.md").exists()
         assert (main_agent_dir / "IDENTITY.md").exists()
@@ -41,8 +43,9 @@ class TestWorkspaceInitializer:
         assert (main_agent_dir / "MEMORY.md").exists()
 
     def test_initialize_idempotent(self, tmp_path):
-        """场景：目录已存在时跳过创建"""
-        initializer = WorkspaceInitializer(str(tmp_path))
+        """Test: Directory already exists, skip creation"""
+        workspace = tmp_path / ".atlasclaw"
+        initializer = WorkspaceInitializer(str(workspace))
         
         # First initialization
         result1 = initializer.initialize()
@@ -53,25 +56,28 @@ class TestWorkspaceInitializer:
         assert result2 is True
         
         # Directory should still exist
-        assert (tmp_path / ".atlasclaw").exists()
+        assert workspace.exists()
 
     def test_is_initialized_returns_false_for_new_workspace(self, tmp_path):
-        """场景：检查未初始化工作区"""
-        initializer = WorkspaceInitializer(str(tmp_path))
+        """Test: Check uninitialized workspace"""
+        workspace = tmp_path / ".atlasclaw"
+        initializer = WorkspaceInitializer(str(workspace))
         assert initializer.is_initialized() is False
 
     def test_is_initialized_returns_true_for_initialized_workspace(self, tmp_path):
-        """场景：检查已初始化工作区"""
-        initializer = WorkspaceInitializer(str(tmp_path))
+        """Test: Check initialized workspace"""
+        workspace = tmp_path / ".atlasclaw"
+        initializer = WorkspaceInitializer(str(workspace))
         initializer.initialize()
         assert initializer.is_initialized() is True
 
     def test_default_main_agent_content(self, tmp_path):
-        """场景：验证默认 main Agent 文件内容"""
-        initializer = WorkspaceInitializer(str(tmp_path))
+        """Test: Verify default main Agent file content"""
+        workspace = tmp_path / ".atlasclaw"
+        initializer = WorkspaceInitializer(str(workspace))
         initializer.initialize()
         
-        soul_md = tmp_path / ".atlasclaw" / "agents" / "main" / "SOUL.md"
+        soul_md = workspace / "agents" / "main" / "SOUL.md"
         content = soul_md.read_text(encoding="utf-8")
         
         assert "agent_id: \"main\"" in content
@@ -154,27 +160,29 @@ class TestWorkspaceIntegration:
     """Integration tests for workspace functionality."""
 
     def test_full_workspace_initialization_flow(self, tmp_path):
-        """场景：服务首次启动，自动创建工作区目录和默认 main Agent"""
-        # Initialize workspace
-        workspace_init = WorkspaceInitializer(str(tmp_path))
+        """Test: Service first start, auto-create workspace directory and default main Agent"""
+        # Initialize workspace (workspace IS the .atlasclaw directory)
+        workspace = tmp_path / ".atlasclaw"
+        workspace_init = WorkspaceInitializer(str(workspace))
         workspace_init.initialize()
         
-        # Initialize default user
-        user_init = UserWorkspaceInitializer(str(tmp_path), "default")
+        # Initialize default user (users directory is inside workspace)
+        user_init = UserWorkspaceInitializer(str(workspace), "default")
         user_init.initialize()
         
         # Verify complete structure
-        assert (tmp_path / ".atlasclaw" / "agents" / "main" / "SOUL.md").exists()
-        assert (tmp_path / "users" / "default" / "sessions").exists()
+        assert (workspace / "agents" / "main" / "SOUL.md").exists()
+        assert (workspace / "users" / "default" / "sessions").exists()
 
     def test_workspace_persists_across_restarts(self, tmp_path):
-        """场景：服务重启，保留已有工作区配置"""
+        """Test: Service restart, preserve existing workspace configuration"""
         # First initialization
-        workspace_init = WorkspaceInitializer(str(tmp_path))
+        workspace = tmp_path / ".atlasclaw"
+        workspace_init = WorkspaceInitializer(str(workspace))
         workspace_init.initialize()
         
         # Modify a file
-        soul_md = tmp_path / ".atlasclaw" / "agents" / "main" / "SOUL.md"
+        soul_md = workspace / "agents" / "main" / "SOUL.md"
         original_content = soul_md.read_text(encoding="utf-8")
         soul_md.write_text(original_content + "\n# Modified", encoding="utf-8")
         

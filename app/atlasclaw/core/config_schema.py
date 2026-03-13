@@ -195,7 +195,7 @@ class MemoryConfig(BaseModel):
 
 class WorkspaceConfig(BaseModel):
     """Workspace configuration"""
-    path: str = Field(default=".", description="Workspace path, defaults to the current directory")
+    path: str = Field(default="./.atlasclaw", description="Workspace path, defaults to ./.atlasclaw directory")
     per_user_isolation: bool = Field(default=True, description="Whether to isolate data per user")
 
 

@@ -182,7 +182,7 @@ class _RecordingPromptBuilder:
         self.prompt = prompt
         self.calls: list[dict] = []
 
-    def build(self, session=None, skills=None, tools=None, md_skills=None, target_md_skill=None, user_info=None):
+    def build(self, session=None, skills=None, tools=None, md_skills=None, target_md_skill=None, user_info=None, provider_contexts=None):
         self.calls.append(
             {
                 "session": session,
@@ -191,6 +191,7 @@ class _RecordingPromptBuilder:
                 "md_skills": md_skills or [],
                 "target_md_skill": target_md_skill,
                 "user_info": user_info,
+                "provider_contexts": provider_contexts or {},
             }
         )
         return self.prompt

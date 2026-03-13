@@ -382,6 +382,7 @@ class AgentRunner:
         tools = self._collect_tools_snapshot()
         md_skills = self._collect_md_skills_snapshot(deps)
         target_md_skill = self._collect_target_md_skill(deps)
+        provider_contexts = self._collect_provider_contexts(deps)
         return self.prompt_builder.build(
             session=session,
             skills=skills,
@@ -389,6 +390,7 @@ class AgentRunner:
             md_skills=md_skills,
             target_md_skill=target_md_skill,
             user_info=deps.user_info,
+            provider_contexts=provider_contexts,
         )
 
     def _collect_skills_snapshot(self, deps: SkillDeps) -> list[dict]:
@@ -414,6 +416,44 @@ class AgentRunner:
         extra = deps.extra if isinstance(deps.extra, dict) else {}
         value = extra.get("target_md_skill")
         return value if isinstance(value, dict) else None
+
+    def _collect_provider_contexts(self, deps: SkillDeps) -> dict[str, dict]:
+        """Collect provider LLM contexts from ServiceProviderRegistry.
+        
+        Returns:
+            Dictionary mapping provider_type to context dict with keys:
+            display_name, description, keywords, capabilities, use_when, avoid_when
+        """
+        extra = deps.extra if isinstance(deps.extra, dict) else {}
+        registry = extra.get("_service_provider_registry")
+        
+        if registry is None:
+            return {}
+        
+        # Check if registry has get_all_provider_contexts method
+        get_contexts = getattr(registry, "get_all_provider_contexts", None)
+        if get_contexts is None:
+            return {}
+        
+        try:
+            contexts = get_contexts()
+            # Convert ProviderContext dataclasses to dicts
+            result = {}
+            for provider_type, ctx in contexts.items():
+                if hasattr(ctx, "__dict__"):
+                    result[provider_type] = {
+                        "display_name": getattr(ctx, "display_name", ""),
+                        "description": getattr(ctx, "description", ""),
+                        "keywords": getattr(ctx, "keywords", []),
+                        "capabilities": getattr(ctx, "capabilities", []),
+                        "use_when": getattr(ctx, "use_when", []),
+                        "avoid_when": getattr(ctx, "avoid_when", []),
+                    }
+                elif isinstance(ctx, dict):
+                    result[provider_type] = ctx
+            return result
+        except Exception:
+            return {}
 
     def _collect_tools_snapshot(self) -> list[dict]:
         """Collect tool name and description pairs for prompt building."""

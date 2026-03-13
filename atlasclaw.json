@@ -1,5 +1,5 @@
 {
-  "providers_root": "../atlasclaw-providers/providers",
+  "providers_root": "./.atlasclaw/providers",
   "model": {
     "primary": "deepseek/deepseek-chat",
     "fallbacks": [],

@@ -7,7 +7,7 @@ import importlib.util
 import logging
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
@@ -72,12 +72,29 @@ class ProviderTemplate:
     skills_dir: Path
 
 
+@dataclass
+class ProviderContext:
+    """LLM context information for a provider.
+    
+    Used by PromptBuilder to generate rich skill selection context.
+    """
+    provider_type: str
+    display_name: str = ""
+    version: str = ""
+    keywords: list[str] = field(default_factory=list)
+    capabilities: list[str] = field(default_factory=list)
+    use_when: list[str] = field(default_factory=list)
+    avoid_when: list[str] = field(default_factory=list)
+    description: str = ""  # First paragraph of PROVIDER.md body
+
+
 class ServiceProviderRegistry:
     """Registry of provider templates and provider instances from configuration."""
 
     def __init__(self) -> None:
         self._templates: dict[str, ProviderTemplate] = {}
         self._instances: dict[str, dict[str, dict[str, Any]]] = {}
+        self._contexts: dict[str, ProviderContext] = {}  # LLM context for each provider
 
     def load_from_directory(self, providers_dir: Path) -> int:
         """Load provider templates from a providers directory."""
@@ -107,10 +124,106 @@ class ServiceProviderRegistry:
                 skills_dir=sub / "skills",
             )
             self._templates[sub.name] = template
+            
+            # Parse PROVIDER.md frontmatter for LLM context
+            context = self._parse_provider_context(md_path, sub.name)
+            if context:
+                self._contexts[context.provider_type] = context
+                logger.debug(
+                    "Loaded provider context: %s (keywords=%d, capabilities=%d)",
+                    context.provider_type,
+                    len(context.keywords),
+                    len(context.capabilities),
+                )
+            
             count += 1
             logger.info("Discovered provider: %s (%s)", sub.name, md_path.name)
 
         return count
+
+    def _parse_provider_context(self, md_path: Path, fallback_name: str) -> Optional[ProviderContext]:
+        """Parse PROVIDER.md frontmatter to extract LLM context.
+        
+        Args:
+            md_path: Path to PROVIDER.md file
+            fallback_name: Provider directory name to use if provider_type not in frontmatter
+            
+        Returns:
+            ProviderContext or None if parsing fails
+        """
+        try:
+            content = md_path.read_text(encoding="utf-8")
+        except Exception as e:
+            logger.warning("Failed to read PROVIDER.md %s: %s", md_path, e)
+            return None
+        
+        from app.atlasclaw.skills.frontmatter import parse_frontmatter
+        
+        result = parse_frontmatter(content)
+        meta = result.metadata
+        
+        # Extract provider_type, fallback to directory name
+        provider_type = meta.get("provider_type", fallback_name)
+        if isinstance(provider_type, list):
+            provider_type = provider_type[0] if provider_type else fallback_name
+        
+        # Extract first paragraph of body as description
+        description = ""
+        body = result.body.strip()
+        if body:
+            # Skip the title line (starts with #)
+            lines = body.split("\n")
+            para_lines = []
+            started = False
+            for line in lines:
+                stripped = line.strip()
+                if not stripped:
+                    if started:
+                        break
+                    continue
+                if stripped.startswith("#"):
+                    continue
+                started = True
+                para_lines.append(stripped)
+            description = " ".join(para_lines)
+        
+        # Helper to ensure list type
+        def as_list(val: Any) -> list[str]:
+            if isinstance(val, list):
+                return [str(v) for v in val]
+            if isinstance(val, str) and val:
+                return [val]
+            return []
+        
+        return ProviderContext(
+            provider_type=str(provider_type),
+            display_name=str(meta.get("display_name", "")),
+            version=str(meta.get("version", "")),
+            keywords=as_list(meta.get("keywords")),
+            capabilities=as_list(meta.get("capabilities")),
+            use_when=as_list(meta.get("use_when")),
+            avoid_when=as_list(meta.get("avoid_when")),
+            description=description,
+        )
+
+    def get_provider_context(self, provider_type: str) -> Optional[ProviderContext]:
+        """Get LLM context for a provider.
+        
+        Args:
+            provider_type: Provider type identifier
+            
+        Returns:
+            ProviderContext or None if not found
+        """
+        return self._contexts.get(provider_type)
+
+    def get_all_provider_contexts(self) -> dict[str, ProviderContext]:
+        """Get all provider contexts.
+        
+        Returns:
+            Dictionary mapping provider_type to ProviderContext
+        """
+        return dict(self._contexts)
 
     def load_instances_from_config(self, config: dict[str, dict[str, Any]]) -> None:
         """Load provider instance configuration from atlasclaw config."""

@@ -113,6 +113,7 @@ class MdSkillEntry:
         file_path: Absolute path to the `SKILL.md` file.
         location: Skill source, such as `built-in`, `user`, or `workspace`.
         metadata: Additional frontmatter keys beyond `name` and `description`.
+                  Supports both string values and lists (e.g., triggers, use_when).
     """
 
     name: str
@@ -121,7 +122,7 @@ class MdSkillEntry:
     provider: str = ""
     qualified_name: str = ""
     location: str = "built-in"
-    metadata: dict[str, str] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 class SkillRegistry:

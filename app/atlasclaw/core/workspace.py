@@ -12,42 +12,44 @@ from typing import Optional
 
 
 class WorkspaceInitializer:
-    """Initialize and manage workspace directory structure."""
+    """Initialize and manage workspace directory structure.
     
-    def __init__(self, workspace_path: str = "."):
+    The workspace directory (default: ./.atlasclaw) contains all AtlasClaw resources
+    including agents, providers, skills, channels, and user data.
+    """
+    
+    def __init__(self, workspace_path: str = "./.atlasclaw"):
         """Initialize workspace initializer.
         
         Args:
-            workspace_path: Path to the workspace root directory.
+            workspace_path: Path to the workspace root directory (default: ./.atlasclaw).
         """
         self.workspace_path = Path(workspace_path).resolve()
-        self.atlasclaw_dir = self.workspace_path / ".atlasclaw"
         self.users_dir = self.workspace_path / "users"
     
     def initialize(self) -> bool:
         """Initialize workspace directory structure.
         
         Creates the following structure:
-        <workspace>/
-        ├── .atlasclaw/
-        │   ├── agents/
-        │   ├── providers/
-        │   ├── skills/
-        │   └── channels/
+        <workspace>/                 (default: ./.atlasclaw)
+        ├── agents/
+        ├── providers/
+        ├── skills/
+        ├── channels/
         └── users/
         
         Returns:
             True if initialization was successful.
         """
         try:
-            # Create .atlasclaw directory structure
-            self.atlasclaw_dir.mkdir(parents=True, exist_ok=True)
-            (self.atlasclaw_dir / "agents").mkdir(exist_ok=True)
-            (self.atlasclaw_dir / "providers").mkdir(exist_ok=True)
-            (self.atlasclaw_dir / "skills").mkdir(exist_ok=True)
-            (self.atlasclaw_dir / "channels").mkdir(exist_ok=True)
+            # Create workspace directory structure
+            self.workspace_path.mkdir(parents=True, exist_ok=True)
+            (self.workspace_path / "agents").mkdir(exist_ok=True)
+            (self.workspace_path / "providers").mkdir(exist_ok=True)
+            (self.workspace_path / "skills").mkdir(exist_ok=True)
+            (self.workspace_path / "channels").mkdir(exist_ok=True)
             
-            # Create users directory
+            # Create users directory inside workspace
             self.users_dir.mkdir(exist_ok=True)
             
             # Create default main agent if not exists
@@ -60,7 +62,7 @@ class WorkspaceInitializer:
     
     def _create_default_main_agent(self) -> None:
         """Create default main agent if it doesn't exist."""
-        main_agent_dir = self.atlasclaw_dir / "agents" / "main"
+        main_agent_dir = self.workspace_path / "agents" / "main"
         if main_agent_dir.exists():
             return
         
@@ -176,10 +178,10 @@ agent_id: "main"
     def is_initialized(self) -> bool:
         """Check if workspace is initialized."""
         return (
-            self.atlasclaw_dir.exists()
-            and (self.atlasclaw_dir / "agents").exists()
-            and (self.atlasclaw_dir / "providers").exists()
-            and (self.atlasclaw_dir / "skills").exists()
+            self.workspace_path.exists()
+            and (self.workspace_path / "agents").exists()
+            and (self.workspace_path / "providers").exists()
+            and (self.workspace_path / "skills").exists()
             and self.users_dir.exists()
         )
 
