@@ -37,6 +37,15 @@ class OIDCAuthConfig(BaseModel):
     client_secret: str = ""
     jwks_uri: str = ""
     scopes: list[str] = ["openid", "profile", "email"]
+    
+    # SSO login flow settings
+    authorization_endpoint: str = ""
+    token_endpoint: str = ""
+    userinfo_endpoint: str = ""
+    end_session_endpoint: str = ""  # Keycloak logout URL
+    redirect_uri: str = ""
+    pkce_enabled: bool = True
+    pkce_method: str = "S256"
 
     def expanded(self) -> "OIDCAuthConfig":
         return OIDCAuthConfig(
@@ -45,6 +54,13 @@ class OIDCAuthConfig(BaseModel):
             client_secret=expand_env(self.client_secret),
             jwks_uri=expand_env(self.jwks_uri),
             scopes=self.scopes,
+            authorization_endpoint=expand_env(self.authorization_endpoint),
+            token_endpoint=expand_env(self.token_endpoint),
+            userinfo_endpoint=expand_env(self.userinfo_endpoint),
+            end_session_endpoint=expand_env(self.end_session_endpoint),
+            redirect_uri=expand_env(self.redirect_uri),
+            pkce_enabled=self.pkce_enabled,
+            pkce_method=self.pkce_method,
         )
 
 
@@ -61,6 +77,7 @@ class NoneAuthConfig(BaseModel):
 
 class AuthConfig(BaseModel):
     """Top-level auth configuration block in atlasclaw.json."""
+    enabled: bool = True          # Set to false to disable auth (anonymous mode)
     provider: str = "none"
     header_name: str = "CloudChef-Authenticate"
     token_prefix: str = ""

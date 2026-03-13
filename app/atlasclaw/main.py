@@ -105,7 +105,7 @@ async def lifespan(app: FastAPI):
     user_skills = Path.home() / ".atlasclaw" / "skills"
     if user_skills.exists():
         _skill_registry.load_from_directory(str(user_skills), location="user")
-    
+
     model_name = config.model.primary
     
     # Resolve model provider config from atlasclaw.json
@@ -184,6 +184,19 @@ async def lifespan(app: FastAPI):
     
     print(f"[AtlasClaw] Agent created with model: {pydantic_model}")
     
+    # Expose config on app.state so routes (e.g. SSO) can access it
+    app.state.config = config
+    # Coerce auth dict → AuthConfig object so SSO routes can call .provider / .oidc
+    if config.auth is not None:
+        from app.atlasclaw.auth.config import AuthConfig
+        if isinstance(config.auth, dict):
+            app.state.config.auth = AuthConfig(**config.auth)
+        else:
+            app.state.config.auth = config.auth
+        # Treat disabled auth same as no auth
+        if not app.state.config.auth.enabled:
+            app.state.config.auth = None
+
     api_context = APIContext(
         session_manager=_session_manager,
         session_queue=_session_queue,
@@ -258,7 +271,7 @@ def create_app() -> FastAPI:
             if index_path.exists():
                 return FileResponse(str(index_path))
             return {"error": "Frontend not found"}
-        
+
         # Serve config.json
         @app.get("/config.json", include_in_schema=False)
         async def serve_config():
@@ -270,7 +283,50 @@ def create_app() -> FastAPI:
     # Include API routes
     api_router = create_router()
     app.include_router(api_router)
-    
+
+    # Include channel webhook routes
+    app.include_router(channel_hooks_router)
+
+    # Include channel management routes
+    app.include_router(channels_router)
+
+    # Include agent info routes
+    app.include_router(agent_info_router)
+
+    # Register AuthMiddleware — must be done at app creation time
+    # (middleware cannot be added after startup)
+    # Use config from lifespan (already loaded with correct working directory)
+    try:
+        from app.atlasclaw.auth.middleware import setup_auth_middleware
+        from app.atlasclaw.core.config import ConfigManager
+        from app.atlasclaw.auth.config import AuthConfig
+
+        # Load config explicitly from the correct path
+        config_path = Path(__file__).parent.parent.parent / "atlasclaw.json"
+        if config_path.exists():
+            _cfg_manager = ConfigManager(config_path=str(config_path))
+            _cfg = _cfg_manager.config
+        else:
+            # Fallback to default config loading
+            from app.atlasclaw.core.config import get_config
+            _cfg = get_config()
+
+        _auth = _cfg.auth if _cfg else None
+        if isinstance(_auth, dict):
+            _auth = AuthConfig(**_auth)
+        # Respect the enabled flag — disabled auth runs in anonymous mode
+        if _auth is not None and not _auth.enabled:
+            _auth = None
+        setup_auth_middleware(app, _auth)
+
+        # Store config reference for routes to use
+        app.state.config = _cfg
+        if _auth is not None and isinstance(_auth, AuthConfig):
+            app.state.config.auth = _auth
+    except Exception as _e:
+        import logging as _logging
+        _logging.getLogger(__name__).warning("AuthMiddleware setup skipped: %s", _e)
+
     return app
 
 

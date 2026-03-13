@@ -19,7 +19,7 @@ from typing import Any, Optional
 from fastapi import FastAPI
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Header, status
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse, RedirectResponse, Response
 from pydantic import BaseModel, Field
 
 from ..session.manager import SessionManager
@@ -261,8 +261,7 @@ def _build_scoped_deps(
 ) -> SkillDeps:
     """Create request-scoped dependencies for agent-style execution."""
     scoped_session_mgr = SessionManager(
-        agents_dir=str(ctx.session_manager.agents_dir),
-        agent_id=ctx.session_manager.agent_id,
+        workspace_path=str(ctx.session_manager.workspace_path),
         user_id=user_info.user_id,
     )
     scoped_memory_mgr: Optional[MemoryManager] = None
@@ -466,7 +465,7 @@ def create_router() -> APIRouter:
         key = SessionKey(
             agent_id=request.agent_id,
             channel=request.channel,
-            chat_type=request.chat_type,
+            chat_type=SessionChatType(request.chat_type),
             user_id=auth_user.user_id,
         )
         session_key_str = key.to_string(scope=SessionScope(request.scope))
@@ -490,7 +489,7 @@ def create_router() -> APIRouter:
         ctx: APIContext = Depends(get_api_context)
     ) -> SessionResponse:
         """get session"""
-        session = await ctx.session_manager.get(session_key)
+        session = await ctx.session_manager.get_session(session_key)
         if not session:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -505,8 +504,8 @@ def create_router() -> APIRouter:
             channel=key.channel,
             user_id=key.user_id,
             created_at=session.created_at,
-            last_activity=session.last_activity,
-            message_count=session.message_count,
+            last_activity=session.updated_at,
+            message_count=getattr(session, "message_count", 0),
             total_tokens=session.total_tokens
         )
         
@@ -517,15 +516,7 @@ def create_router() -> APIRouter:
         ctx: APIContext = Depends(get_api_context)
     ) -> dict[str, Any]:
         """Reset a session"""
-        success = await ctx.session_manager.reset(
-            session_key, archive=request.archive
-        )
-        
-        if not success:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Session not found: {session_key}"
-            )
+        await ctx.session_manager.reset_session(session_key, archive=request.archive)
             
         return {"status": "reset", "session_key": session_key}
         
@@ -535,7 +526,7 @@ def create_router() -> APIRouter:
         ctx: APIContext = Depends(get_api_context)
     ) -> dict[str, Any]:
         """Delete a session"""
-        success = await ctx.session_manager.delete(session_key)
+        success = await ctx.session_manager.delete_session(session_key)
         
         if not success:
             raise HTTPException(
@@ -855,22 +846,23 @@ def create_router() -> APIRouter:
         ctx: APIContext = Depends(get_api_context)
     ) -> StatusResponse:
         """get session"""
-        session = await ctx.session_manager.get(session_key)
+        session = await ctx.session_manager.get_session(session_key)
         if not session:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Session not found: {session_key}"
             )
             
-        queue_info = ctx.session_queue.get_info(session_key)
+        queue_mode = ctx.session_queue.get_mode(session_key)
+        queue_size = ctx.session_queue.queue_size(session_key)
         
         return StatusResponse(
             session_key=session_key,
             context_tokens=session.context_tokens,
             input_tokens=session.input_tokens,
             output_tokens=session.output_tokens,
-            queue_mode=queue_info.get("mode", "collect") if queue_info else "collect",
-            queue_size=queue_info.get("size", 0) if queue_info else 0
+            queue_mode=queue_mode.value,
+            queue_size=queue_size,
         )
         
     @router.post("/sessions/{session_key}/queue")
@@ -888,7 +880,7 @@ def create_router() -> APIRouter:
                 detail=f"Invalid queue mode: {request.mode}"
             )
             
-        ctx.session_queue.set_mode(session_key, mode)
+        ctx.session_queue.set_session_mode(session_key, mode)
         
         return {"session_key": session_key, "queue_mode": request.mode}
         
@@ -899,7 +891,7 @@ def create_router() -> APIRouter:
         ctx: APIContext = Depends(get_api_context)
     ) -> dict[str, Any]:
         """trigger"""
-        session = await ctx.session_manager.get(session_key)
+        session = await ctx.session_manager.get_session(session_key)
         if not session:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -923,5 +915,301 @@ def create_router() -> APIRouter:
             "status": "healthy",
             "timestamp": datetime.now(timezone.utc).isoformat()
         }
+    
+    # ============================================================================
+    # SSO OIDC Login Flow
+    # ============================================================================
+    
+    @router.get("/auth/login")
+    async def sso_login(request: Request):
+        """Initiate OIDC SSO login flow with PKCE — redirects browser to IdP."""
+        from ..auth.config import AuthConfig
+        from ..auth.providers.oidc_sso import OIDCSSOProvider
+        
+        # Get auth config from app state
+        auth_config: AuthConfig = request.app.state.config.auth
+        if not auth_config or auth_config.provider != "oidc":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="OIDC provider not configured"
+            )
+        
+        oidc_config = auth_config.oidc.expanded()
+        if not oidc_config.redirect_uri:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="auth.oidc.redirect_uri is required for SSO login"
+            )
+        
+        # Create SSO provider
+        provider = OIDCSSOProvider(
+            issuer=oidc_config.issuer,
+            client_id=oidc_config.client_id,
+            client_secret=oidc_config.client_secret,
+            redirect_uri=oidc_config.redirect_uri,
+            authorization_endpoint=oidc_config.authorization_endpoint,
+            token_endpoint=oidc_config.token_endpoint,
+            userinfo_endpoint=oidc_config.userinfo_endpoint,
+            jwks_uri=oidc_config.jwks_uri,
+            scopes=oidc_config.scopes,
+            pkce_enabled=oidc_config.pkce_enabled,
+            pkce_method=oidc_config.pkce_method,
+        )
+        
+        # Generate state and PKCE
+        import secrets
+        state = secrets.token_urlsafe(32)
+        code_verifier, code_challenge = provider.generate_pkce()
+        
+        # Build authorization URL
+        auth_url = provider.build_authorization_url(state, code_challenge)
+        
+        # secure=True only for HTTPS deployments; HTTP (local dev) uses False
+        _secure = oidc_config.redirect_uri.startswith("https://")
+        
+        # Redirect browser to IdP login page (302), store state+verifier in cookies
+        response = RedirectResponse(url=auth_url, status_code=302)
+        response.set_cookie(
+            key="sso_state",
+            value=state,
+            httponly=True,
+            secure=_secure,
+            samesite="lax",
+            max_age=600  # 10 minutes
+        )
+        response.set_cookie(
+            key="pkce_verifier",
+            value=code_verifier,
+            httponly=True,
+            secure=_secure,
+            samesite="lax",
+            max_age=600
+        )
+        
+        return response
+    
+    @router.get("/auth/callback")
+    async def sso_callback(
+        request: Request,
+        code: str = "",
+        state: str = "",
+        error: str = "",
+        error_description: str = ""
+    ) -> JSONResponse:
+        """Handle OIDC SSO callback from identity provider."""
+        from ..auth.config import AuthConfig
+        from ..auth.providers.oidc_sso import OIDCSSOProvider
+        
+        # Handle IdP error
+        if error:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"IdP error: {error} - {error_description}"
+            )
+        
+        # Get cookies
+        cookie_state = request.cookies.get("sso_state")
+        code_verifier = request.cookies.get("pkce_verifier")
+        logger.error(
+            "[SSOCallback] state=%s cookie_state=%s has_verifier=%s all_cookies=%s",
+            state, cookie_state, bool(code_verifier), list(request.cookies.keys())
+        )
+        
+        # Validate state
+        if not state or state != cookie_state:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid or missing state parameter"
+            )
+        
+        if not code_verifier:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="PKCE verifier missing or expired"
+            )
+        
+        # Get auth config
+        auth_config: AuthConfig = request.app.state.config.auth
+        if not auth_config or auth_config.provider != "oidc":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="OIDC provider not configured"
+            )
+        
+        oidc_config = auth_config.oidc.expanded()
+        
+        # Create SSO provider
+        provider = OIDCSSOProvider(
+            issuer=oidc_config.issuer,
+            client_id=oidc_config.client_id,
+            client_secret=oidc_config.client_secret,
+            redirect_uri=oidc_config.redirect_uri,
+            authorization_endpoint=oidc_config.authorization_endpoint,
+            token_endpoint=oidc_config.token_endpoint,
+            userinfo_endpoint=oidc_config.userinfo_endpoint,
+            jwks_uri=oidc_config.jwks_uri,
+            scopes=oidc_config.scopes,
+            pkce_enabled=oidc_config.pkce_enabled,
+            pkce_method=oidc_config.pkce_method,
+        )
+        
+        # Complete login
+        try:
+            auth_result = await provider.complete_login(code, code_verifier)
+        except Exception as exc:
+            logger.error(f"SSO login failed: {exc}")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=f"SSO authentication failed: {exc}"
+            )
+        
+        # Create session via API context (session_manager is not on app.state)
+        ctx = get_api_context()
+        key = SessionKey(
+            agent_id="main",
+            channel="web",
+            chat_type=SessionChatType.DM,
+            user_id=auth_result.subject,
+        )
+        session_key_str = key.to_string(scope=SessionScope.MAIN)
+        session = await ctx.session_manager.get_or_create(session_key_str)
+        
+        # Build response with session info
+        response_data = {
+            "status": "success",
+            "user": {
+                "id": auth_result.subject,
+                "name": auth_result.display_name,
+                "email": auth_result.email,
+                "roles": auth_result.roles,
+            },
+            "session": {
+                "key": session_key_str,
+                "created_at": session.created_at.isoformat(),
+            }
+        }
+        
+        # secure=True only for HTTPS deployments; HTTP (local dev) uses False
+        _secure = oidc_config.redirect_uri.startswith("https://")
+        
+        # Redirect to home page after successful SSO login
+        response = RedirectResponse(url="/", status_code=302)
+        
+        # Set session cookie (session key for session lookup)
+        response.set_cookie(
+            key="atlasclaw_session",
+            value=session_key_str,
+            httponly=True,
+            secure=_secure,
+            samesite="lax",
+            max_age=86400  # 24 hours
+        )
+        
+        # Set auth token cookie so AuthMiddleware can validate subsequent requests
+        if auth_result.raw_token:
+            response.set_cookie(
+                key="CloudChef-Authenticate",
+                value=auth_result.raw_token,
+                httponly=True,
+                secure=_secure,
+                samesite="lax",
+                max_age=86400
+            )
+        
+        # Store id_token for logout id_token_hint (skips Keycloak confirm page)
+        if auth_result.id_token:
+            response.set_cookie(
+                key="oidc_id_token",
+                value=auth_result.id_token,
+                httponly=True,
+                secure=_secure,
+                samesite="lax",
+                max_age=86400
+            )
+        
+        # Clear SSO cookies
+        response.delete_cookie("sso_state")
+        response.delete_cookie("pkce_verifier")
+        
+        return response
+    
+    @router.get("/auth/me")
+    async def auth_me(request: Request) -> dict[str, Any]:
+        """Get current authenticated user info."""
+        session_key = request.cookies.get("atlasclaw_session")
+        if not session_key:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Not authenticated"
+            )
+        
+        session_manager: SessionManager = request.app.state.session_manager
+        session = await session_manager.get(session_key)
+        if not session:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Session expired or invalid"
+            )
+        
+        return {
+            "user_id": session.user_id,
+            "session_key": session.key,
+            "metadata": session.metadata,
+        }
+    
+    @router.get("/auth/logout")
+    async def auth_logout(request: Request, redirect: bool = True) -> Response:
+        """
+        Logout and clear session.
+        
+        Args:
+            redirect: If True (default), redirect to IdP logout for single logout.
+                     Set to False for AJAX/API calls that just need local logout.
+        """
+        from ..auth.config import AuthConfig
+        
+        session_key = request.cookies.get("atlasclaw_session")
+        
+        if session_key:
+            ctx = get_api_context()
+            await ctx.session_manager.delete_session(session_key)
+        
+        # Check if OIDC with end_session_endpoint is configured
+        auth_config: AuthConfig = request.app.state.config.auth
+        idp_logout_url = None
+        if (
+            auth_config
+            and auth_config.provider == "oidc"
+            and redirect
+        ):
+            oidc_config = auth_config.oidc.expanded()
+            if oidc_config.end_session_endpoint:
+                # Build Keycloak logout URL
+                # After Keycloak logout, redirect back to our SSO login to re-authenticate
+                post_logout_uri = str(request.base_url).rstrip("/") + "/api/auth/login"
+                id_token_hint = request.cookies.get("oidc_id_token", "")
+                logout_params = (
+                    f"?post_logout_redirect_uri={post_logout_uri}"
+                    f"&client_id={oidc_config.client_id}"
+                )
+                if id_token_hint:
+                    logout_params += f"&id_token_hint={id_token_hint}"
+                idp_logout_url = f"{oidc_config.end_session_endpoint}{logout_params}"
+        
+        if idp_logout_url:
+            # Redirect to IdP logout for single logout
+            response = RedirectResponse(url=idp_logout_url, status_code=302)
+        else:
+            # Local logout only
+            response = JSONResponse(content={"status": "logged_out"})
+        
+        # Always clear local cookies
+        response.delete_cookie("atlasclaw_session")
+        response.delete_cookie("CloudChef-Authenticate")
+        response.delete_cookie("oidc_id_token")
+        response.delete_cookie("sso_state")
+        response.delete_cookie("pkce_verifier")
+        
+        return response
         
     return router
