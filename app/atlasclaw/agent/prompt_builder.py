@@ -143,15 +143,15 @@ class PromptBuilder:
                 parts.append(user_ctx)
         
         if self.config.mode == PromptMode.FULL:
-            # 4. Executable skills
-            if skills:
-                parts.append(self._build_skills_listing(skills))
-            
-            # 4b. Markdown skill index
+            # 4. Markdown skill index (HIGHEST PRIORITY - check these first!)
             if md_skills:
                 md_index = self._build_md_skills_index(md_skills)
                 if md_index:
                     parts.append(md_index)
+            
+            # 4b. Executable skills (fallback only if no MD skill matches)
+            if skills:
+                parts.append(self._build_skills_listing(skills))
 
             if target_md_skill:
                 parts.append(self._build_target_md_skill(target_md_skill))
@@ -258,7 +258,7 @@ class PromptBuilder:
         if not skills:
             return ""
         
-        lines = ["## 技能", "", "<available_skills>"]
+        lines = ["## Built-in Tools (Use ONLY if no MD Skill matches)", "", "<available_skills>"]
         for s in skills:
             name = s.get("name", "unknown")
             description = s.get("description", "")
@@ -271,6 +271,7 @@ class PromptBuilder:
     <location>{location}</location>
   </skill>""")
         lines.append("</available_skills>")
+        lines.append("\nNOTE: These built-in tools are fallback options. ALWAYS check MD Skills section above first.")
         return "\n".join(lines)
     
     def _build_md_skills_index(self, md_skills: list[dict]) -> str:
@@ -304,12 +305,10 @@ Build the Markdown skills XML index section plus execution instructions.
 
         # three core execution instructions
         instructions = (
-            "When a user's task matches a skill description below, "
-            "use the `read` tool to load the SKILL.md at the given location.\n"
-            "If the SKILL.md references relative paths, resolve them "
-            "relative to the directory containing that SKILL.md.\n"
-            "After reading the SKILL.md, use the available tools "
-            "(exec, read, write, edit, etc.) to carry out the instructions in the document."
+            "When a user's task matches a skill description below:\n"
+            "1. Use the `read` tool to load the SKILL.md at the given location\n"
+            "2. Follow the instructions in the SKILL.md to execute the task\n"
+            "3. Use the available tools (exec, read, write, edit, etc.) as needed"
         )
 
         header = f"## MD Skills\n\n{instructions}\n\n<available_skills>\n"

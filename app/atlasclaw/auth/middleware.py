@@ -16,7 +16,7 @@ from typing import Optional
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, RedirectResponse
 
 from app.atlasclaw.auth.models import UserInfo, ANONYMOUS_USER, AuthenticationError
 from app.atlasclaw.auth.strategy import AuthStrategy
@@ -25,6 +25,12 @@ logger = logging.getLogger(__name__)
 
 # Paths that bypass authentication entirely
 _SKIP_PATHS = frozenset({"/health", "/ping", "/favicon.ico", "/docs", "/openapi.json"})
+
+# SSO paths — must not be intercepted by auth checks
+_SSO_PATHS = frozenset({"/api/auth/login", "/api/auth/callback", "/api/auth/logout", "/api/auth/me"})
+
+# Static asset path prefixes — always pass through (no auth, no redirect)
+_STATIC_PREFIXES = ("/static/", "/styles/", "/scripts/", "/locales/", "/config.json", "/index.html")
 
 
 class AuthMiddleware(BaseHTTPMiddleware):
@@ -45,14 +51,27 @@ class AuthMiddleware(BaseHTTPMiddleware):
         app,
         strategy: AuthStrategy,
         anonymous_fallback: bool = False,
+        oidc_redirect_uri: str = "",
     ) -> None:
         super().__init__(app)
         self._strategy = strategy
         self._anonymous_fallback = anonymous_fallback
+        # Non-empty means standalone deployment: middleware can redirect to SSO
+        self._oidc_redirect_uri = oidc_redirect_uri
 
     async def dispatch(self, request: Request, call_next):
         # Skip non-API / health paths
         if request.url.path in _SKIP_PATHS:
+            request.state.user_info = ANONYMOUS_USER
+            return await call_next(request)
+
+        # Static assets — always pass through without auth
+        if request.url.path.startswith(_STATIC_PREFIXES):
+            request.state.user_info = ANONYMOUS_USER
+            return await call_next(request)
+
+        # SSO flow paths — always pass through without auth
+        if request.url.path in _SSO_PATHS:
             request.state.user_info = ANONYMOUS_USER
             return await call_next(request)
 
@@ -74,6 +93,17 @@ class AuthMiddleware(BaseHTTPMiddleware):
         # Real provider: extract and validate credential
         credential = self._extract_credential(request)
         if not credential:
+            # If a redirect_uri is configured (standalone deployment),
+            # redirect browser navigations to SSO login.
+            # Root path "/" always redirects to SSO regardless of Accept header.
+            if self._oidc_redirect_uri and (
+                request.url.path == "/" or self._is_browser_request(request)
+            ):
+                logger.debug(
+                    "No credential → redirecting to SSO login: %s",
+                    request.url.path,
+                )
+                return RedirectResponse(url="/api/auth/login", status_code=302)
             return JSONResponse(
                 status_code=401,
                 content={"detail": "Invalid or expired token"},
@@ -88,6 +118,18 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 status_code=401,
                 content={"detail": "Invalid or expired token"},
             )
+
+    @staticmethod
+    def _is_browser_request(request: Request) -> bool:
+        """
+        Heuristic: a request is considered a browser navigation when
+        the ``Accept`` header includes ``text/html`` AND there is no
+        ``X-Requested-With: XMLHttpRequest`` header (which SPA/iframe
+        XHR calls usually set).
+        """
+        accept = request.headers.get("accept", "")
+        xhr = request.headers.get("x-requested-with", "")
+        return "text/html" in accept and xhr.lower() != "xmlhttprequest"
 
     @staticmethod
     def _extract_credential(request: Request) -> str:
@@ -166,7 +208,19 @@ def setup_auth_middleware(
         )
         return
 
-    app.add_middleware(AuthMiddleware, strategy=strategy, anonymous_fallback=False)
+    # Pass redirect_uri so middleware can auto-detect standalone vs embedded mode
+    oidc_redirect_uri = ""
+    if auth_config.provider.lower() == "oidc":
+        oidc_redirect_uri = auth_config.oidc.expanded().redirect_uri
+
+    app.add_middleware(
+        AuthMiddleware,
+        strategy=strategy,
+        anonymous_fallback=False,
+        oidc_redirect_uri=oidc_redirect_uri,
+    )
     logger.info(
-        "AuthMiddleware: registered with provider=%r", auth_config.provider
+        "AuthMiddleware: registered with provider=%r, standalone_sso=%s",
+        auth_config.provider,
+        bool(oidc_redirect_uri),
     )

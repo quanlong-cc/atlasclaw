@@ -19,7 +19,7 @@ from typing import Any, Optional
 from fastapi import FastAPI
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Header, status
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
 from ..session.manager import SessionManager
@@ -915,5 +915,251 @@ def create_router() -> APIRouter:
             "status": "healthy",
             "timestamp": datetime.now(timezone.utc).isoformat()
         }
+    
+    # ============================================================================
+    # SSO OIDC Login Flow
+    # ============================================================================
+    
+    @router.get("/auth/login")
+    async def sso_login(request: Request):
+        """Initiate OIDC SSO login flow with PKCE — redirects browser to IdP."""
+        from ..auth.config import AuthConfig
+        from ..auth.providers.oidc_sso import OIDCSSOProvider
+        
+        # Get auth config from app state
+        auth_config: AuthConfig = request.app.state.config.auth
+        if not auth_config or auth_config.provider != "oidc":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="OIDC provider not configured"
+            )
+        
+        oidc_config = auth_config.oidc.expanded()
+        if not oidc_config.redirect_uri:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="auth.oidc.redirect_uri is required for SSO login"
+            )
+        
+        # Create SSO provider
+        provider = OIDCSSOProvider(
+            issuer=oidc_config.issuer,
+            client_id=oidc_config.client_id,
+            client_secret=oidc_config.client_secret,
+            redirect_uri=oidc_config.redirect_uri,
+            authorization_endpoint=oidc_config.authorization_endpoint,
+            token_endpoint=oidc_config.token_endpoint,
+            userinfo_endpoint=oidc_config.userinfo_endpoint,
+            jwks_uri=oidc_config.jwks_uri,
+            scopes=oidc_config.scopes,
+            pkce_enabled=oidc_config.pkce_enabled,
+            pkce_method=oidc_config.pkce_method,
+        )
+        
+        # Generate state and PKCE
+        import secrets
+        state = secrets.token_urlsafe(32)
+        code_verifier, code_challenge = provider.generate_pkce()
+        
+        # Build authorization URL
+        auth_url = provider.build_authorization_url(state, code_challenge)
+        
+        # secure=True only for HTTPS deployments; HTTP (local dev) uses False
+        _secure = oidc_config.redirect_uri.startswith("https://")
+        
+        # Redirect browser to IdP login page (302), store state+verifier in cookies
+        response = RedirectResponse(url=auth_url, status_code=302)
+        response.set_cookie(
+            key="sso_state",
+            value=state,
+            httponly=True,
+            secure=_secure,
+            samesite="lax",
+            max_age=600  # 10 minutes
+        )
+        response.set_cookie(
+            key="pkce_verifier",
+            value=code_verifier,
+            httponly=True,
+            secure=_secure,
+            samesite="lax",
+            max_age=600
+        )
+        
+        return response
+    
+    @router.get("/auth/callback")
+    async def sso_callback(
+        request: Request,
+        code: str = "",
+        state: str = "",
+        error: str = "",
+        error_description: str = ""
+    ) -> JSONResponse:
+        """Handle OIDC SSO callback from identity provider."""
+        from ..auth.config import AuthConfig
+        from ..auth.providers.oidc_sso import OIDCSSOProvider
+        
+        # Handle IdP error
+        if error:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"IdP error: {error} - {error_description}"
+            )
+        
+        # Get cookies
+        cookie_state = request.cookies.get("sso_state")
+        code_verifier = request.cookies.get("pkce_verifier")
+        logger.error(
+            "[SSOCallback] state=%s cookie_state=%s has_verifier=%s all_cookies=%s",
+            state, cookie_state, bool(code_verifier), list(request.cookies.keys())
+        )
+        
+        # Validate state
+        if not state or state != cookie_state:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid or missing state parameter"
+            )
+        
+        if not code_verifier:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="PKCE verifier missing or expired"
+            )
+        
+        # Get auth config
+        auth_config: AuthConfig = request.app.state.config.auth
+        if not auth_config or auth_config.provider != "oidc":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="OIDC provider not configured"
+            )
+        
+        oidc_config = auth_config.oidc.expanded()
+        
+        # Create SSO provider
+        provider = OIDCSSOProvider(
+            issuer=oidc_config.issuer,
+            client_id=oidc_config.client_id,
+            client_secret=oidc_config.client_secret,
+            redirect_uri=oidc_config.redirect_uri,
+            authorization_endpoint=oidc_config.authorization_endpoint,
+            token_endpoint=oidc_config.token_endpoint,
+            userinfo_endpoint=oidc_config.userinfo_endpoint,
+            jwks_uri=oidc_config.jwks_uri,
+            scopes=oidc_config.scopes,
+            pkce_enabled=oidc_config.pkce_enabled,
+            pkce_method=oidc_config.pkce_method,
+        )
+        
+        # Complete login
+        try:
+            auth_result = await provider.complete_login(code, code_verifier)
+        except Exception as exc:
+            logger.error(f"SSO login failed: {exc}")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=f"SSO authentication failed: {exc}"
+            )
+        
+        # Create session via API context (session_manager is not on app.state)
+        ctx = get_api_context()
+        key = SessionKey(
+            agent_id="main",
+            channel="web",
+            chat_type=ChatType.DM,
+            user_id=auth_result.subject,
+        )
+        session_key_str = key.to_string(scope=SessionScope.MAIN)
+        session = await ctx.session_manager.get_or_create(session_key_str)
+        
+        # Build response with session info
+        response_data = {
+            "status": "success",
+            "user": {
+                "id": auth_result.subject,
+                "name": auth_result.display_name,
+                "email": auth_result.email,
+                "roles": auth_result.roles,
+            },
+            "session": {
+                "key": session_key_str,
+                "created_at": session.created_at.isoformat(),
+            }
+        }
+        
+        # secure=True only for HTTPS deployments; HTTP (local dev) uses False
+        _secure = oidc_config.redirect_uri.startswith("https://")
+        
+        # Redirect to home page after successful SSO login
+        response = RedirectResponse(url="/", status_code=302)
+        
+        # Set session cookie (session key for session lookup)
+        response.set_cookie(
+            key="atlasclaw_session",
+            value=session_key_str,
+            httponly=True,
+            secure=_secure,
+            samesite="lax",
+            max_age=86400  # 24 hours
+        )
+        
+        # Set auth token cookie so AuthMiddleware can validate subsequent requests
+        if auth_result.raw_token:
+            response.set_cookie(
+                key="CloudChef-Authenticate",
+                value=auth_result.raw_token,
+                httponly=True,
+                secure=_secure,
+                samesite="lax",
+                max_age=86400
+            )
+        
+        # Clear SSO cookies
+        response.delete_cookie("sso_state")
+        response.delete_cookie("pkce_verifier")
+        
+        return response
+    
+    @router.get("/auth/me")
+    async def auth_me(request: Request) -> dict[str, Any]:
+        """Get current authenticated user info."""
+        session_key = request.cookies.get("atlasclaw_session")
+        if not session_key:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Not authenticated"
+            )
+        
+        session_manager: SessionManager = request.app.state.session_manager
+        session = await session_manager.get(session_key)
+        if not session:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Session expired or invalid"
+            )
+        
+        return {
+            "user_id": session.user_id,
+            "session_key": session.key,
+            "metadata": session.metadata,
+        }
+    
+    @router.post("/auth/logout")
+    async def auth_logout(request: Request) -> JSONResponse:
+        """Logout and clear session."""
+        session_key = request.cookies.get("atlasclaw_session")
+        
+        if session_key:
+            session_manager: SessionManager = request.app.state.session_manager
+            await session_manager.delete(session_key)
+        
+        response = JSONResponse(content={"status": "logged_out"})
+        response.delete_cookie("atlasclaw_session")
+        response.delete_cookie("sso_state")
+        response.delete_cookie("pkce_verifier")
+        
+        return response
         
     return router
